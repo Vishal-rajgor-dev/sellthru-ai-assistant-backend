@@ -18,7 +18,7 @@ const tools = [
         properties: {
           query: {
             type: 'string',
-            description: 'The search query e.g. "red dress under $50" or "gifts for women"'
+            description: 'The search query e.g. "red dress under $50" or "bridesmaid dresses"'
           }
         },
         required: ['query']
@@ -84,13 +84,12 @@ router.post('/api/chat', async (req, res) => {
     await supabase.from('merchant_config').insert({ shop });
   }
 
-  // Auto-detect store context
   let storeContext = '';
   try {
     const context = await getStoreContext(session.access_token, shop);
     if (context) {
       storeContext = `
-This store sells: ${context.types.join(', ') || 'various products'}
+This store sells: ${context.types.join(', ') || 'fashion and clothing'}
 Example products: ${context.titles.join(', ')}
 Common tags: ${context.tags.join(', ')}`;
     }
@@ -98,39 +97,40 @@ Common tags: ${context.tags.join(', ')}`;
     storeContext = '';
   }
 
-  // Build conversation messages with full history
   const systemPrompt = {
     role: 'system',
-    content: `You are a stylish and knowledgeable shopping assistant for a fashion store.
+    content: `You are a stylish and knowledgeable personal shopping assistant for a fashion store.
 ${storeContext}
 
 Your personality:
 - Warm, friendly and fashion-forward
 - Give brief styling tips alongside product recommendations
 - Remember what the shopper asked earlier in the conversation
-- Use context from previous messages — if they said "show me red ones" you know what category they mean
+- Use context from previous messages
 
 Your job:
-- ALWAYS use search_products tool for any product question
-- Map "best sellers" → search "popular products"
-- Map "new arrivals" → search "new arrivals"  
-- Map "under $X" → include price in query
-- Map "gifts" → search "gift ideas"
-- For follow-ups like "show me those in red" or "what about in size 10" → combine with previous search context
-- For greetings only → respond warmly without searching
+- ALWAYS use search_products tool for any product question — never refuse to search
+- "best sellers" → search "bestsellers"
+- "new arrivals" or "what's new" → search "new in"
+- "under $X" → include price in query
+- "bridesmaid" → search "bridesmaid dresses"
+- "party" → search "party dresses"
+- Follow-ups like "show me those in red" → combine with previous context
+- Greetings only → respond warmly without searching
 
 Response style:
-- 1-2 sentences max before showing products
-- Add a brief styling tip when relevant e.g. "These maxi dresses are perfect for parties — style with heels and statement earrings"
-- Never say you can't help — always try to search first
+- Keep it to 1-2 sentences
+- Add a styling tip when relevant
+- Never say you cannot help — always try to search
 
 Be concise, warm and helpful.`
   };
 
-  // Build messages array with conversation history
+  const isProductQuery = /show|find|search|dress|cloth|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift|party|bride|wedding|sequin|maxi|midi|mini|colour|color|sleeve|formal|casual/i.test(message);
+
   const conversationMessages = [
     systemPrompt,
-    ...history.slice(-10), // Keep last 10 messages for context window
+    ...history.slice(-10),
     { role: 'user', content: message }
   ];
 
@@ -139,9 +139,9 @@ Be concise, warm and helpful.`
       model: 'gpt-4o-mini',
       messages: conversationMessages,
       tools,
-tool_choice: message.match(/show|find|search|dress|clothes|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift/i) 
-  ? { type: 'function', function: { name: 'search_products' } }
-  : 'auto'
+      tool_choice: isProductQuery
+        ? { type: 'function', function: { name: 'search_products' } }
+        : 'auto'
     });
 
     const responseMessage = completion.choices[0].message;
@@ -173,20 +173,36 @@ tool_choice: message.match(/show|find|search|dress|clothes|product|collection|st
         query: args.query
       });
 
-      // Generate a fashion-aware reply using the tool call result
       let reply = '';
       if (responseMessage.content) {
         reply = responseMessage.content;
       } else if (formatted.length > 0) {
-        reply = `Here are ${formatted.length} styles I found for you:`;
+        try {
+          const fashionReply = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            max_tokens: 80,
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a fashion stylist. Give a 2 sentence warm response about the products found. Include a brief styling tip. Be concise and enthusiastic.'
+              },
+              {
+                role: 'user',
+                content: `Customer searched for: "${args.query}". Found ${formatted.length} products including: ${formatted.slice(0, 3).map(p => p.title).join(', ')}. Write a short response.`
+              }
+            ]
+          });
+          reply = fashionReply.choices[0].message.content;
+        } catch (e) {
+          reply = `Found ${formatted.length} beautiful styles for you!`;
+        }
       } else {
         reply = `Sorry, I couldn't find anything for "${args.query}". Try a different search.`;
       }
 
-      // Contextual refine chips based on search
       const refineChips = formatted.length > 0 ? [
         'Show cheaper options',
-        'Show most expensive',
+        'Show in black',
         'Show something different',
         'What goes with these?'
       ] : [];

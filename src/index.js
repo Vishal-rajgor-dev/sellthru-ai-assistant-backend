@@ -35,7 +35,6 @@ app.get('/api/widget/config', async (req, res) => {
     .eq('shop', shop)
     .single();
 
-  // If merchant has custom chips saved, use those
   if (data?.prompt_chips && data.prompt_chips.length > 0) {
     return res.json({
       enabled: data?.widget_enabled ?? true,
@@ -46,153 +45,123 @@ app.get('/api/widget/config', async (req, res) => {
     });
   }
 
-  // Otherwise auto-generate chips from store products
-  try {
-    const { data: session } = await supabase
-      .from('sessions')
-      .select('access_token')
-      .eq('shop', shop)
-      .single();
+  generateAndSaveChips(shop).catch(e => console.error('Chip gen error:', e.message));
 
-    if (session?.access_token) {
-      const { getStoreContext } = require('./services/catalogMcp');
-      const context = await getStoreContext(session.access_token, shop);
-
-      if (context) {
-        const chips = generateSmartChips(context);
-
-        // Save generated chips so we don't regenerate every time
-        await supabase
-          .from('merchant_config')
-          .upsert({ shop, prompt_chips: chips, updated_at: new Date().toISOString() });
-
-        return res.json({
-          enabled: data?.widget_enabled ?? true,
-          position: data?.widget_position || 'bottom-right',
-          color: data?.primary_color || '#000000',
-          greeting: data?.widget_greeting || 'Hi! How can I help you find something today?',
-          promptChips: chips
-        });
-      }
-    }
-  } catch (e) {
-    console.error('Auto chip generation error:', e.message);
-  }
-
-  // Final fallback
   res.json({
     enabled: data?.widget_enabled ?? true,
     position: data?.widget_position || 'bottom-right',
     color: data?.primary_color || '#000000',
     greeting: data?.widget_greeting || 'Hi! How can I help you find something today?',
-    promptChips: ["What's new?", 'Best sellers', 'Gifts', 'Under $50']
+    promptChips: ["What's new?", 'Best sellers', 'Party dresses', 'Bridesmaid dresses', 'Under $100', 'Wedding guest']
   });
 });
 
-function generateSmartChips(context) {
-  const chips = [];
-  const types = context.types || [];
-  const tags = context.tags || [];
-  const titles = context.titles || [];
-  const minPrice = context.minPrice;
-  const maxPrice = context.maxPrice;
-
-  // Extract keywords from product titles
-  const titleWords = titles
-    .join(' ')
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(w => w.length > 4)
-    .filter(w => !['with', 'from', 'this', 'that', 'have', 'your', 'their'].includes(w));
-  const uniqueWords = [...new Set(titleWords)].slice(0, 10);
-
-  // Product type chips
-  if (types.length > 0) {
-    chips.push(`Show me ${types[0]}`);
-    if (types.length > 1) chips.push(`Browse ${types[1]}`);
-  } else if (uniqueWords.length > 0) {
-    // Use title keywords if no product types
-    chips.push(`Show me ${uniqueWords[0]}`);
-    if (uniqueWords.length > 1) chips.push(`Browse ${uniqueWords[1]}`);
-  }
-
-  // Tag-based chips
-  const usefulTags = tags.filter(t =>
-    !['sale', 'new', 'featured', 'home-page', 'homepage'].includes(t.toLowerCase())
-  );
-  if (usefulTags.length > 0) chips.push(`${usefulTags[0]} collection`);
-  if (usefulTags.length > 1) chips.push(`Shop ${usefulTags[1]}`);
-
-  // Always add these
-  chips.push("What's new?");
-  chips.push('Best sellers');
-
-  // Price chip based on actual product prices
-  if (maxPrice && maxPrice < 50) {
-    chips.push('Under $50');
-  } else if (maxPrice && maxPrice < 100) {
-    chips.push('Under $100');
-  } else if (maxPrice) {
-    chips.push(`Under $${Math.round(maxPrice * 0.5)}`);
-  }
-
-  // Occasion tags
-  const occasionTags = tags.filter(t =>
-    ['party', 'wedding', 'casual', 'formal', 'summer', 'winter', 'bridal', 'evening', 'holiday'].some(
-      occ => t.toLowerCase().includes(occ)
-    )
-  );
-  if (occasionTags.length > 0) {
-    chips.push(`${occasionTags[0].charAt(0).toUpperCase() + occasionTags[0].slice(1)} styles`);
-  }
-
-  // Deduplicate and limit to 6
-  return [...new Set(chips)].slice(0, 6);
-}
-app.post('/api/refresh-chips', async (req, res) => {
-  const { shop } = req.body;
-  if (!shop) return res.status(400).json({ error: 'Missing shop' });
-
-  try {
-    const { data: session } = await supabase
-      .from('sessions')
-      .select('access_token')
-      .eq('shop', shop)
-      .single();
-
-    if (!session) return res.status(401).json({ error: 'Not installed' });
-
-    const { getStoreContext } = require('./services/catalogMcp');
-    const context = await getStoreContext(session.access_token, shop);
-    const chips = generateSmartChips(context);
-
-    await supabase
-      .from('merchant_config')
-      .upsert({ shop, prompt_chips: chips, updated_at: new Date().toISOString() });
-
-    res.json({ chips });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-app.get('/debug-context', async (req, res) => {
-  const shop = req.query.shop || 'sellthru-ai-assistance.myshopify.com';
+async function generateAndSaveChips(shop) {
   const { data: session } = await supabase
     .from('sessions')
     .select('access_token')
     .eq('shop', shop)
     .single();
 
-  if (!session) return res.json({ error: 'No session' });
+  if (!session?.access_token) return;
 
-  const { getStoreContext } = require('./services/catalogMcp');
-  const context = await getStoreContext(session.access_token, shop);
-  res.json(context);
+  const { searchProducts } = require('./services/catalogMcp');
+
+  const queries = ['dress', 'bridesmaid', 'party', 'maxi', 'wedding guest'];
+  let allTags = [];
+  let allTitles = [];
+  let prices = [];
+
+  for (const q of queries) {
+    try {
+      const result = await searchProducts(session.access_token, shop, q, { limit: 5 });
+      if (result?.products?.length) {
+        result.products.forEach(p => {
+          allTags.push(...(p.tags || []));
+          allTitles.push(p.title);
+          const price = p.price_range?.min?.amount;
+          if (price) prices.push(Math.round(price / 100));
+        });
+      }
+    } catch (e) { continue; }
+  }
+
+  if (!allTitles.length) return;
+
+  const chips = generateSmartChips({ tags: allTags, titles: allTitles, prices });
+  console.log('Generated chips:', chips);
+
+  await supabase
+    .from('merchant_config')
+    .upsert({ shop, prompt_chips: chips, updated_at: new Date().toISOString() });
+}
+
+function generateSmartChips({ tags = [], titles = [], prices = [] }) {
+  const chips = new Set();
+
+  const skipPrefixes = ['colour_', 'color_', 'price_', 'length_', 'sleeve_', 'size'];
+  const usefulTags = [...new Set(tags)]
+    .filter(t => !skipPrefixes.some(p => t.toLowerCase().startsWith(p)))
+    .filter(t => t.length > 3 && t.length < 25)
+    .filter(t => !['all products', 'new', 'new in', 'new collection', 'faire4', 'sale',
+      'high inventory', 'back in stock', 'all sale lb', 'non trad bride'].includes(t.toLowerCase()));
+
+  const occasionTags = usefulTags.filter(t =>
+    ['party', 'wedding', 'bridesmaid', 'prom', 'bridal', 'hen', 'occasion',
+      'evening', 'gown', 'maxi', 'midi', 'mini', 'sequin', 'birthday'].some(
+      k => t.toLowerCase().includes(k)
+    )
+  );
+
+  occasionTags.slice(0, 3).forEach(t => {
+    chips.add(t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
+  });
+
+  chips.add("What's new?");
+  chips.add('Best sellers');
+
+  if (prices.length) {
+    const sorted = [...prices].sort((a, b) => a - b);
+    const mid = sorted[Math.floor(sorted.length / 2)];
+    if (mid <= 50) chips.add('Under $50');
+    else if (mid <= 100) chips.add('Under $100');
+    else chips.add('Under $150');
+  }
+
+  const remaining = usefulTags.filter(t => !occasionTags.includes(t));
+  remaining.slice(0, 2).forEach(t => {
+    chips.add(t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
+  });
+
+  return [...chips].slice(0, 6);
+}
+
+app.post('/api/refresh-chips', async (req, res) => {
+  const { shop } = req.body;
+  if (!shop) return res.status(400).json({ error: 'Missing shop' });
+  try {
+    await supabase.from('merchant_config').update({ prompt_chips: null }).eq('shop', shop);
+    await generateAndSaveChips(shop);
+    const { data } = await supabase.from('merchant_config').select('prompt_chips').eq('shop', shop).single();
+    res.json({ chips: data?.prompt_chips || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
+
 app.get('/widget/config.js', (req, res) => {
   const shop = req.query.shop;
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`window.sellthruShop="${shop}";window.sellthruApiUrl="${process.env.APP_URL}";`);
+});
+
+app.get('/debug-context', async (req, res) => {
+  const shop = req.query.shop || 'sellthru-ai-assistance.myshopify.com';
+  const { data: session } = await supabase.from('sessions').select('access_token').eq('shop', shop).single();
+  if (!session) return res.json({ error: 'No session' });
+  const { searchProducts } = require('./services/catalogMcp');
+  const result = await searchProducts(session.access_token, shop, 'dress', { limit: 3 });
+  res.json({ products: result?.products?.length, sample: result?.products?.[0]?.tags?.slice(0, 5) });
 });
 
 app.listen(PORT, () => {
