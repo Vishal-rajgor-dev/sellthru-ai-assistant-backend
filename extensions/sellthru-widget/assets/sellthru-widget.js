@@ -4,7 +4,7 @@
 
   async function init() {
     try {
-      const r = await fetch(`${API_URL}/api/widget/config?shop=${SHOP}`);
+      const r = await fetch(`${API_URL}/api/widget/config?shop=${encodeURIComponent(SHOP)}`);
       const config = await r.json();
       if (!config.enabled) return;
       mount(config);
@@ -14,126 +14,120 @@
   }
 
   function mount(config) {
+    if (document.getElementById('slt-launcher')) return;
     const COLOR = config.color || '#000';
     const GREETING = config.greeting || 'Hi! How can I help you find something today?';
     const CHIPS = config.promptChips || ["What's new?", 'Best sellers', 'Under $100', 'Gifts'];
 
-    const host = document.createElement('div');
-    host.id = 'sellthru-host';
-    host.style.cssText = 'position:fixed;bottom:0;right:0;z-index:2147483647;';
-    const shadow = host.attachShadow({ mode: 'open' });
-
     const style = document.createElement('style');
+    style.id = 'slt-styles';
     style.textContent = `
-      *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-      #st-launcher{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:${COLOR};border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;pointer-events:all;transition:transform 0.2s;box-shadow:0 4px 16px rgba(0,0,0,0.18)}
-      #st-launcher:hover{transform:scale(1.08)}
-      #st-launcher svg{width:26px;height:26px;fill:white;pointer-events:none}
-      #st-window{position:fixed;bottom:92px;right:24px;width:420px;height:600px;background:#fff;border-radius:20px;border:1px solid #e5e5e5;display:flex;flex-direction:column;overflow:hidden;pointer-events:all;transition:opacity 0.2s,transform 0.2s;box-shadow:0 8px 40px rgba(0,0,0,0.14)}
-      #st-window.hidden{opacity:0;pointer-events:none;transform:translateY(12px)}
-      #st-header{background:${COLOR};color:#fff;padding:14px 18px;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
-      #st-header-left{display:flex;align-items:center;gap:10px}
-      #st-header-dot{width:8px;height:8px;background:#4ade80;border-radius:50%;animation:pulse 2s infinite}
-      @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
-      #st-close{background:none;border:none;color:#fff;cursor:pointer;font-size:22px;line-height:1;padding:0;opacity:0.7}
-      #st-close:hover{opacity:1}
-      #st-messages{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
-      #st-messages::-webkit-scrollbar{width:4px}
-      #st-messages::-webkit-scrollbar-thumb{background:#ddd;border-radius:4px}
-      .st-msg{max-width:85%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.5;word-break:break-word}
-      .st-bot{background:#f4f4f4;color:#111;align-self:flex-start;border-bottom-left-radius:4px}
-      .st-user{background:${COLOR};color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
-      .st-typing{display:flex;gap:4px;align-items:center;padding:12px 16px;background:#f4f4f4;border-radius:14px;border-bottom-left-radius:4px;align-self:flex-start}
-      .st-typing span{width:7px;height:7px;background:#999;border-radius:50%;display:inline-block;animation:bounce 1.2s infinite}
-      .st-typing span:nth-child(2){animation-delay:0.2s}
-      .st-typing span:nth-child(3){animation-delay:0.4s}
-      @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
-      .st-products{width:100%}
-      .st-filter-bar{display:flex;gap:6px;flex-wrap:wrap;padding-bottom:8px}
-      .st-filter-btn{background:#fff;border:1px solid #ddd;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:500;cursor:pointer;color:#333;transition:all 0.15s;white-space:nowrap}
-      .st-filter-btn:hover,.st-filter-btn.active{background:${COLOR};color:#fff;border-color:${COLOR}}
-      .st-slider-wrap{position:relative;width:100%}
-      .st-slider{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding-bottom:4px;cursor:grab}
-      .st-slider::-webkit-scrollbar{display:none}
-      .st-slider:active{cursor:grabbing}
-      .st-slider-btn{position:absolute;top:38%;transform:translateY(-50%);width:32px;height:32px;border-radius:50%;background:#fff;border:1px solid #ddd;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:10;font-size:18px;box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:all 0.15s;line-height:1}
-      .st-slider-btn:hover{background:${COLOR};color:#fff;border-color:${COLOR}}
-      .st-slider-prev{left:-14px}
-      .st-slider-next{right:-14px}
-      .st-card{background:#fff;border:1px solid #ebebeb;border-radius:12px;overflow:hidden;transition:border-color 0.15s,transform 0.15s;display:flex;flex-direction:column;flex-shrink:0;width:175px;scroll-snap-align:start}
-      .st-card:hover{border-color:#bbb;transform:translateY(-2px)}
-      .st-card-img-wrap{position:relative;width:100%;aspect-ratio:1;overflow:hidden;cursor:pointer;background:#f8f8f8}
-      .st-card-img-wrap img{width:100%;height:100%;object-fit:cover;transition:transform 0.3s}
-      .st-card-img-wrap:hover img{transform:scale(1.05)}
-      .st-img-dots{position:absolute;bottom:7px;left:50%;transform:translateX(-50%);display:flex;gap:4px}
-      .st-img-dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.5);transition:background 0.2s}
-      .st-img-dot.active{background:#fff}
-      .st-card-badge{position:absolute;top:7px;left:7px;font-size:9px;font-weight:700;padding:3px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:0.5px}
-      .st-badge-out{background:#e44;color:#fff}
-      .st-badge-sale{background:#e44;color:#fff}
-      .st-card-body{padding:10px 11px 12px;flex:1;display:flex;flex-direction:column}
-      .st-card-title{font-size:12px;font-weight:600;color:#111;margin-bottom:5px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-      .st-card-prices{display:flex;align-items:center;gap:5px;margin-bottom:8px;flex-wrap:wrap}
-      .st-price{font-size:14px;font-weight:700;color:#111}
-      .st-compare{font-size:11px;color:#aaa;text-decoration:line-through}
-      .st-variants{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
-      .st-variant-pill{border:1.5px solid #ddd;border-radius:5px;padding:3px 7px;font-size:10px;font-weight:500;cursor:pointer;color:#555;transition:all 0.15s;background:#fff}
-      .st-variant-pill.selected{border-color:${COLOR};color:${COLOR};background:#f5f5f5}
-      .st-variant-more{font-size:10px;color:#999;padding:3px 0;align-self:center}
-      .st-card-actions{display:flex;gap:6px;margin-top:auto}
-      .st-add{flex:1;background:${COLOR};color:#fff;border:none;border-radius:7px;padding:9px 4px;font-size:11px;font-weight:600;cursor:pointer;transition:background 0.15s}
-      .st-add:disabled{background:#ccc;cursor:default}
-      .st-add.st-added{background:#1a7a4a}
-      .st-quick-view{background:#fff;color:#333;border:1.5px solid #ddd;border-radius:7px;padding:9px 8px;font-size:11px;font-weight:500;cursor:pointer;white-space:nowrap;transition:all 0.15s}
-      .st-quick-view:hover{border-color:${COLOR};color:${COLOR}}
-      .st-qv-panel{background:#fff;border:1px solid #ebebeb;border-radius:14px;overflow:hidden;width:100%}
-      .st-qv-imgs{display:flex;gap:6px;padding:10px;overflow-x:auto;background:#f8f8f8}
-      .st-qv-imgs img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:2px solid transparent;cursor:pointer;flex-shrink:0;transition:border-color 0.15s}
-      .st-qv-imgs img.active{border-color:${COLOR}}
-      .st-qv-main{width:100%;aspect-ratio:1;object-fit:cover}
-      .st-qv-body{padding:14px}
-      .st-qv-title{font-size:15px;font-weight:700;margin-bottom:6px;color:#111}
-      .st-qv-desc{font-size:12px;color:#666;line-height:1.6;margin-bottom:12px}
-      .st-qv-add{width:100%;background:${COLOR};color:#fff;border:none;border-radius:9px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:8px;transition:background 0.15s}
-      .st-qv-add.st-added{background:#1a7a4a}
-      .st-qv-close{width:100%;background:none;border:1px solid #ddd;border-radius:9px;padding:10px;font-size:13px;cursor:pointer;color:#555}
-      .st-qv-close:hover{border-color:#999;color:#000}
-      .st-load-more-wrap{margin-top:8px}
-      .st-load-more{width:100%;background:#fff;border:1.5px solid ${COLOR};border-radius:10px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.15s;color:${COLOR}}
-      .st-load-more:hover{background:${COLOR};color:#fff}
-      .st-follow-chips{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0}
-      .st-follow-chip{background:#f4f4f4;border:1px solid #e5e5e5;border-radius:20px;padding:6px 14px;font-size:12px;cursor:pointer;white-space:nowrap;transition:background 0.15s}
-      .st-follow-chip:hover{background:#e0e0e0}
-      #st-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 10px;flex-shrink:0}
-      .st-chip{background:#f4f4f4;border:1px solid #e5e5e5;border-radius:20px;padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background 0.15s}
-      .st-chip:hover{background:#e0e0e0}
-      #st-input-row{display:flex;gap:8px;padding:12px 14px;border-top:1px solid #f0f0f0;flex-shrink:0;background:#fff}
-      #st-input{flex:1;border:1.5px solid #e5e5e5;border-radius:10px;padding:10px 14px;font-size:14px;outline:none;font-family:inherit;color:#111}
-      #st-input:focus{border-color:${COLOR}}
-      #st-send{background:${COLOR};color:#fff;border:none;border-radius:10px;padding:10px 16px;font-size:16px;cursor:pointer;transition:background 0.15s}
-      #st-send:disabled{background:#ccc;cursor:default}
+      #slt-launcher{position:fixed!important;bottom:24px!important;right:24px!important;width:56px!important;height:56px!important;border-radius:50%!important;background:${COLOR}!important;border:none!important;cursor:pointer!important;display:flex!important;align-items:center!important;justify-content:center!important;z-index:2147483647!important;box-shadow:0 4px 16px rgba(0,0,0,0.18)!important;transition:transform 0.2s!important;padding:0!important}
+      #slt-launcher:hover{transform:scale(1.08)!important}
+      #slt-launcher svg{width:26px!important;height:26px!important;fill:white!important;pointer-events:none!important}
+      #slt-window{position:fixed!important;bottom:92px!important;right:24px!important;width:420px!important;height:600px!important;background:#fff!important;border-radius:20px!important;border:1px solid #e5e5e5!important;display:flex!important;flex-direction:column!important;overflow:hidden!important;z-index:2147483646!important;box-shadow:0 8px 40px rgba(0,0,0,0.14)!important;transition:opacity 0.2s,transform 0.2s!important;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif!important}
+      #slt-window.slt-hidden{opacity:0!important;pointer-events:none!important;transform:translateY(12px)!important}
+      #slt-header{background:${COLOR}!important;color:#fff!important;padding:14px 18px!important;font-size:15px!important;font-weight:600!important;display:flex!important;align-items:center!important;justify-content:space-between!important;flex-shrink:0!important}
+      #slt-header-left{display:flex!important;align-items:center!important;gap:10px!important}
+      #slt-header-dot{width:8px!important;height:8px!important;background:#4ade80!important;border-radius:50%!important;animation:slt-pulse 2s infinite!important}
+      @keyframes slt-pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+      #slt-close{background:none!important;border:none!important;color:#fff!important;cursor:pointer!important;font-size:22px!important;line-height:1!important;padding:0!important;opacity:0.7!important}
+      #slt-close:hover{opacity:1!important}
+      #slt-messages{flex:1!important;overflow-y:auto!important;padding:14px!important;display:flex!important;flex-direction:column!important;gap:12px!important}
+      #slt-messages::-webkit-scrollbar{width:4px!important}
+      #slt-messages::-webkit-scrollbar-thumb{background:#ddd!important;border-radius:4px!important}
+      .slt-msg{max-width:85%!important;padding:10px 14px!important;border-radius:14px!important;font-size:14px!important;line-height:1.5!important;word-break:break-word!important}
+      .slt-bot{background:#f4f4f4!important;color:#111!important;align-self:flex-start!important;border-bottom-left-radius:4px!important}
+      .slt-user{background:${COLOR}!important;color:#fff!important;align-self:flex-end!important;border-bottom-right-radius:4px!important}
+      .slt-typing{display:flex!important;gap:4px!important;align-items:center!important;padding:12px 16px!important;background:#f4f4f4!important;border-radius:14px!important;border-bottom-left-radius:4px!important;align-self:flex-start!important}
+      .slt-typing span{width:7px!important;height:7px!important;background:#999!important;border-radius:50%!important;display:inline-block!important;animation:slt-bounce 1.2s infinite!important}
+      .slt-typing span:nth-child(2){animation-delay:0.2s!important}
+      .slt-typing span:nth-child(3){animation-delay:0.4s!important}
+      @keyframes slt-bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
+      .slt-products{width:100%!important}
+      .slt-filter-bar{display:flex!important;gap:6px!important;flex-wrap:wrap!important;padding-bottom:8px!important}
+      .slt-filter-btn{background:#fff!important;border:1px solid #ddd!important;border-radius:20px!important;padding:5px 12px!important;font-size:11px!important;font-weight:500!important;cursor:pointer!important;color:#333!important;transition:all 0.15s!important;white-space:nowrap!important}
+      .slt-filter-btn:hover,.slt-filter-btn.active{background:${COLOR}!important;color:#fff!important;border-color:${COLOR}!important}
+      .slt-slider-wrap{position:relative!important;width:100%!important}
+      .slt-slider{display:flex!important;gap:10px!important;overflow-x:auto!important;scroll-snap-type:x mandatory!important;scrollbar-width:none!important;padding-bottom:4px!important;cursor:grab!important}
+      .slt-slider::-webkit-scrollbar{display:none!important}
+      .slt-slider:active{cursor:grabbing!important}
+      .slt-slider-btn{position:absolute!important;top:38%!important;transform:translateY(-50%)!important;width:32px!important;height:32px!important;border-radius:50%!important;background:#fff!important;border:1px solid #ddd!important;cursor:pointer!important;display:flex!important;align-items:center!important;justify-content:center!important;z-index:10!important;font-size:18px!important;box-shadow:0 2px 8px rgba(0,0,0,0.12)!important;transition:all 0.15s!important;line-height:1!important}
+      .slt-slider-btn:hover{background:${COLOR}!important;color:#fff!important;border-color:${COLOR}!important}
+      .slt-slider-prev{left:-14px!important}
+      .slt-slider-next{right:-14px!important}
+      .slt-card{background:#fff!important;border:1px solid #ebebeb!important;border-radius:12px!important;overflow:hidden!important;transition:border-color 0.15s,transform 0.15s!important;display:flex!important;flex-direction:column!important;flex-shrink:0!important;width:175px!important;scroll-snap-align:start!important}
+      .slt-card:hover{border-color:#bbb!important;transform:translateY(-2px)!important}
+      .slt-card-img-wrap{position:relative!important;width:100%!important;aspect-ratio:1!important;overflow:hidden!important;cursor:pointer!important;background:#f8f8f8!important}
+      .slt-card-img-wrap img{width:100%!important;height:100%!important;object-fit:cover!important;transition:transform 0.3s!important}
+      .slt-card-img-wrap:hover img{transform:scale(1.05)!important}
+      .slt-img-dots{position:absolute!important;bottom:7px!important;left:50%!important;transform:translateX(-50%)!important;display:flex!important;gap:4px!important}
+      .slt-img-dot{width:5px!important;height:5px!important;border-radius:50%!important;background:rgba(255,255,255,0.5)!important;transition:background 0.2s!important}
+      .slt-img-dot.active{background:#fff!important}
+      .slt-card-badge{position:absolute!important;top:7px!important;left:7px!important;font-size:9px!important;font-weight:700!important;padding:3px 7px!important;border-radius:4px!important;text-transform:uppercase!important;letter-spacing:0.5px!important}
+      .slt-badge-out{background:#e44!important;color:#fff!important}
+      .slt-badge-sale{background:#e44!important;color:#fff!important}
+      .slt-card-body{padding:10px 11px 12px!important;flex:1!important;display:flex!important;flex-direction:column!important}
+      .slt-card-title{font-size:12px!important;font-weight:600!important;color:#111!important;margin-bottom:5px!important;line-height:1.4!important;display:-webkit-box!important;-webkit-line-clamp:2!important;-webkit-box-orient:vertical!important;overflow:hidden!important}
+      .slt-card-prices{display:flex!important;align-items:center!important;gap:5px!important;margin-bottom:8px!important;flex-wrap:wrap!important}
+      .slt-price{font-size:14px!important;font-weight:700!important;color:#111!important}
+      .slt-compare{font-size:11px!important;color:#aaa!important;text-decoration:line-through!important}
+      .slt-variants{display:flex!important;flex-wrap:wrap!important;gap:4px!important;margin-bottom:8px!important}
+      .slt-variant-pill{border:1.5px solid #ddd!important;border-radius:5px!important;padding:3px 7px!important;font-size:10px!important;font-weight:500!important;cursor:pointer!important;color:#555!important;transition:all 0.15s!important;background:#fff!important}
+      .slt-variant-pill.selected{border-color:${COLOR}!important;color:${COLOR}!important;background:#f5f5f5!important}
+      .slt-variant-more{font-size:10px!important;color:#999!important;padding:3px 0!important;align-self:center!important}
+      .slt-card-actions{display:flex!important;gap:6px!important;margin-top:auto!important}
+      .slt-add{flex:1!important;background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:7px!important;padding:9px 4px!important;font-size:11px!important;font-weight:600!important;cursor:pointer!important;transition:background 0.15s!important}
+      .slt-add:disabled{background:#ccc!important;cursor:default!important}
+      .slt-add.slt-added{background:#1a7a4a!important}
+      .slt-quick-view{background:#fff!important;color:#333!important;border:1.5px solid #ddd!important;border-radius:7px!important;padding:9px 8px!important;font-size:11px!important;font-weight:500!important;cursor:pointer!important;white-space:nowrap!important;transition:all 0.15s!important}
+      .slt-quick-view:hover{border-color:${COLOR}!important;color:${COLOR}!important}
+      .slt-qv-panel{background:#fff!important;border:1px solid #ebebeb!important;border-radius:14px!important;overflow:hidden!important;width:100%!important}
+      .slt-qv-imgs{display:flex!important;gap:6px!important;padding:10px!important;overflow-x:auto!important;background:#f8f8f8!important}
+      .slt-qv-imgs img{width:64px!important;height:64px!important;object-fit:cover!important;border-radius:8px!important;border:2px solid transparent!important;cursor:pointer!important;flex-shrink:0!important;transition:border-color 0.15s!important}
+      .slt-qv-imgs img.active{border-color:${COLOR}!important}
+      .slt-qv-main{width:100%!important;aspect-ratio:1!important;object-fit:cover!important}
+      .slt-qv-body{padding:14px!important}
+      .slt-qv-title{font-size:15px!important;font-weight:700!important;margin-bottom:6px!important;color:#111!important}
+      .slt-qv-desc{font-size:12px!important;color:#666!important;line-height:1.6!important;margin-bottom:12px!important}
+      .slt-qv-add{width:100%!important;background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:9px!important;padding:12px!important;font-size:14px!important;font-weight:600!important;cursor:pointer!important;margin-bottom:8px!important;transition:background 0.15s!important}
+      .slt-qv-add.slt-added{background:#1a7a4a!important}
+      .slt-qv-close{width:100%!important;background:none!important;border:1px solid #ddd!important;border-radius:9px!important;padding:10px!important;font-size:13px!important;cursor:pointer!important;color:#555!important}
+      .slt-qv-close:hover{border-color:#999!important;color:#000!important}
+      .slt-load-more-wrap{margin-top:8px!important}
+      .slt-load-more{width:100%!important;background:#fff!important;border:1.5px solid ${COLOR}!important;border-radius:10px!important;padding:11px!important;font-size:13px!important;font-weight:600!important;cursor:pointer!important;transition:all 0.15s!important;color:${COLOR}!important}
+      .slt-load-more:hover{background:${COLOR}!important;color:#fff!important}
+      .slt-follow-chips{display:flex!important;flex-wrap:wrap!important;gap:6px!important;padding:4px 0!important}
+      .slt-follow-chip{background:#f4f4f4!important;border:1px solid #e5e5e5!important;border-radius:20px!important;padding:6px 14px!important;font-size:12px!important;cursor:pointer!important;white-space:nowrap!important;transition:background 0.15s!important}
+      .slt-follow-chip:hover{background:#e0e0e0!important}
+      #slt-chips{display:flex!important;flex-wrap:wrap!important;gap:6px!important;padding:0 14px 10px!important;flex-shrink:0!important}
+      .slt-chip{background:#f4f4f4!important;border:1px solid #e5e5e5!important;border-radius:20px!important;padding:7px 14px!important;font-size:12px!important;font-weight:500!important;cursor:pointer!important;white-space:nowrap!important;transition:background 0.15s!important}
+      .slt-chip:hover{background:#e0e0e0!important}
+      #slt-input-row{display:flex!important;gap:8px!important;padding:12px 14px!important;border-top:1px solid #f0f0f0!important;flex-shrink:0!important;background:#fff!important}
+      #slt-input{flex:1!important;border:1.5px solid #e5e5e5!important;border-radius:10px!important;padding:10px 14px!important;font-size:14px!important;outline:none!important;font-family:inherit!important;color:#111!important}
+      #slt-input:focus{border-color:${COLOR}!important}
+      #slt-send{background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:10px!important;padding:10px 16px!important;font-size:16px!important;cursor:pointer!important;transition:background 0.15s!important}
+      #slt-send:disabled{background:#ccc!important;cursor:default!important}
     `;
-    shadow.appendChild(style);
+    document.head.appendChild(style);
 
     const launcher = document.createElement('button');
-launcher.id = 'st-launcher';
-launcher.setAttribute('aria-label', 'Open shopping assistant');
-launcher.style.pointerEvents = 'all';
+    launcher.id = 'slt-launcher';
+    launcher.setAttribute('aria-label', 'Open shopping assistant');
     launcher.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
-    shadow.appendChild(launcher);
+    document.body.appendChild(launcher);
 
     const win = document.createElement('div');
-win.id = 'st-window';
-win.classList.add('hidden');
-win.style.pointerEvents = 'all';
-    win.innerHTML = '<div id="st-header"><div id="st-header-left"><div id="st-header-dot"></div><span>Shopping Assistant</span></div><button id="st-close">×</button></div><div id="st-messages"></div><div id="st-chips"></div><div id="st-input-row"><input id="st-input" type="text" placeholder="Search products, ask questions..." autocomplete="off"/><button id="st-send">↑</button></div>';
-    shadow.appendChild(win);
+    win.id = 'slt-window';
+    win.classList.add('slt-hidden');
+    win.innerHTML = '<div id="slt-header"><div id="slt-header-left"><div id="slt-header-dot"></div><span>Shopping Assistant</span></div><button id="slt-close">×</button></div><div id="slt-messages"></div><div id="slt-chips"></div><div id="slt-input-row"><input id="slt-input" type="text" placeholder="Search products, ask questions..." autocomplete="off"/><button id="slt-send">↑</button></div>';
+    document.body.appendChild(win);
 
-    const closeBtn = shadow.getElementById('st-close');
-    const messages = shadow.getElementById('st-messages');
-    const input = shadow.getElementById('st-input');
-    const sendBtn = shadow.getElementById('st-send');
-    const chipsContainer = shadow.getElementById('st-chips');
+    const closeBtn = document.getElementById('slt-close');
+    const messages = document.getElementById('slt-messages');
+    const input = document.getElementById('slt-input');
+    const sendBtn = document.getElementById('slt-send');
+    const chipsContainer = document.getElementById('slt-chips');
 
     let isOpen = false;
     let lastProducts = [];
@@ -141,7 +135,7 @@ win.style.pointerEvents = 'all';
 
     function toggleWidget() {
       isOpen = !isOpen;
-      win.classList.toggle('hidden', !isOpen);
+      win.classList.toggle('slt-hidden', !isOpen);
       if (isOpen && messages.children.length === 0) { addBotMessage(GREETING); renderChips(CHIPS); }
       if (isOpen) setTimeout(() => input.focus(), 300);
     }
@@ -149,15 +143,11 @@ win.style.pointerEvents = 'all';
     launcher.addEventListener('click', toggleWidget);
     closeBtn.addEventListener('click', toggleWidget);
 
-    document.addEventListener('click', (e) => {
-      if (isOpen && !host.contains(e.target)) { isOpen = false; win.classList.add('hidden'); }
-    });
-
     function renderChips(chips) {
       chipsContainer.innerHTML = '';
       chips.forEach(chip => {
         const btn = document.createElement('button');
-        btn.className = 'st-chip';
+        btn.className = 'slt-chip';
         btn.textContent = chip;
         btn.addEventListener('click', () => { chipsContainer.innerHTML = ''; sendMessage(chip); });
         chipsContainer.appendChild(btn);
@@ -166,7 +156,7 @@ win.style.pointerEvents = 'all';
 
     function addBotMessage(text) {
       const div = document.createElement('div');
-      div.className = 'st-msg st-bot';
+      div.className = 'slt-msg slt-bot';
       div.textContent = text;
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
@@ -174,7 +164,7 @@ win.style.pointerEvents = 'all';
 
     function addUserMessage(text) {
       const div = document.createElement('div');
-      div.className = 'st-msg st-user';
+      div.className = 'slt-msg slt-user';
       div.textContent = text;
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
@@ -182,15 +172,15 @@ win.style.pointerEvents = 'all';
 
     function showTyping() {
       const div = document.createElement('div');
-      div.className = 'st-typing';
-      div.id = 'st-typing-ind';
+      div.className = 'slt-typing';
+      div.id = 'slt-typing-ind';
       div.innerHTML = '<span></span><span></span><span></span>';
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
     }
 
     function hideTyping() {
-      const t = shadow.getElementById('st-typing-ind');
+      const t = document.getElementById('slt-typing-ind');
       if (t) t.remove();
     }
 
@@ -217,7 +207,7 @@ win.style.pointerEvents = 'all';
 
     function createProductCard(p) {
       const card = document.createElement('div');
-      card.className = 'st-card';
+      card.className = 'slt-card';
       let selectedVariantId = p.variantId;
       let currentImgIndex = 0;
       const images = p.images?.length ? p.images : (p.image ? [p.image] : []);
@@ -225,173 +215,141 @@ win.style.pointerEvents = 'all';
       if (p.comparePrice && p.price) {
         const orig = parseFloat(p.comparePrice.replace('$',''));
         const curr = parseFloat(p.price.replace('$',''));
-        if (orig > curr) { const pct = Math.round((orig-curr)/orig*100); saveBadge = `<span class="st-card-badge st-badge-sale">-${pct}%</span>`; }
+        if (orig > curr) { const pct = Math.round((orig-curr)/orig*100); saveBadge = `<span class="slt-card-badge slt-badge-sale">-${pct}%</span>`; }
       }
-      const outBadge = !p.available ? '<span class="st-card-badge st-badge-out">Out of stock</span>' : '';
-      const dotsHtml = images.length > 1 ? `<div class="st-img-dots">${images.map((_,i) => `<div class="st-img-dot${i===0?' active':''}"></div>`).join('')}</div>` : '';
+      const outBadge = !p.available ? '<span class="slt-card-badge slt-badge-out">Out of stock</span>' : '';
+      const dotsHtml = images.length > 1 ? `<div class="slt-img-dots">${images.map((_,i) => `<div class="slt-img-dot${i===0?' active':''}"></div>`).join('')}</div>` : '';
       const safeId = p.id.split('/').pop();
-      card.innerHTML = `<div class="st-card-img-wrap">${outBadge}${saveBadge}<img id="cimg-${safeId}" src="${images[0]||''}" alt="${p.title}" onerror="this.style.background='#f0f0f0'"/>${dotsHtml}</div><div class="st-card-body"><div class="st-card-title">${p.title}</div><div class="st-card-prices"><span class="st-price">${p.price||''}</span>${p.comparePrice?`<span class="st-compare">${p.comparePrice}</span>`:''}</div><div class="st-variants" id="cvars-${safeId}"></div><div class="st-card-actions"><button class="st-add" id="cadd-${safeId}">${p.available?'Add to Cart':'Out of Stock'}</button><button class="st-quick-view" id="cqv-${safeId}">View</button></div></div>`;
+      card.innerHTML = `<div class="slt-card-img-wrap">${outBadge}${saveBadge}<img id="sltcimg-${safeId}" src="${images[0]||''}" alt="${p.title}" onerror="this.style.background='#f0f0f0'"/>${dotsHtml}</div><div class="slt-card-body"><div class="slt-card-title">${p.title}</div><div class="slt-card-prices"><span class="slt-price">${p.price||''}</span>${p.comparePrice?`<span class="slt-compare">${p.comparePrice}</span>`:''}</div><div class="slt-variants" id="sltcvars-${safeId}"></div><div class="slt-card-actions"><button class="slt-add" id="sltcadd-${safeId}">${p.available?'Add to Cart':'Out of Stock'}</button><button class="slt-quick-view" id="sltcqv-${safeId}">View</button></div></div>`;
 
-      const imgEl = card.querySelector(`#cimg-${safeId}`);
-      const dots = card.querySelectorAll('.st-img-dot');
+      const imgEl = card.querySelector(`#sltcimg-${safeId}`);
+      const dots = card.querySelectorAll('.slt-img-dot');
       if (images.length > 1) {
         let imgTimer;
-        card.querySelector('.st-card-img-wrap').addEventListener('mouseenter', () => { imgTimer = setInterval(() => { currentImgIndex = (currentImgIndex+1)%images.length; imgEl.src = images[currentImgIndex]; dots.forEach((d,i) => d.classList.toggle('active', i===currentImgIndex)); }, 1200); });
-        card.querySelector('.st-card-img-wrap').addEventListener('mouseleave', () => { clearInterval(imgTimer); currentImgIndex = 0; imgEl.src = images[0]; dots.forEach((d,i) => d.classList.toggle('active', i===0)); });
+        card.querySelector('.slt-card-img-wrap').addEventListener('mouseenter', () => { imgTimer = setInterval(() => { currentImgIndex=(currentImgIndex+1)%images.length; imgEl.src=images[currentImgIndex]; dots.forEach((d,i)=>d.classList.toggle('active',i===currentImgIndex)); },1200); });
+        card.querySelector('.slt-card-img-wrap').addEventListener('mouseleave', () => { clearInterval(imgTimer); currentImgIndex=0; imgEl.src=images[0]; dots.forEach((d,i)=>d.classList.toggle('active',i===0)); });
       }
 
-      const variantContainer = card.querySelector(`#cvars-${safeId}`);
+      const variantContainer = card.querySelector(`#sltcvars-${safeId}`);
       if (p.variants.length > 1) {
         p.variants.slice(0,3).forEach((v,i) => {
           const pill = document.createElement('button');
-          pill.className = 'st-variant-pill' + (i===0?' selected':'');
+          pill.className = 'slt-variant-pill'+(i===0?' selected':'');
           pill.textContent = v.title;
-          if (!v.available) pill.style.opacity = '0.4';
-          pill.addEventListener('click', () => { selectedVariantId = v.id; variantContainer.querySelectorAll('.st-variant-pill').forEach(vp => vp.classList.remove('selected')); pill.classList.add('selected'); });
+          if (!v.available) pill.style.opacity='0.4';
+          pill.addEventListener('click', () => { selectedVariantId=v.id; variantContainer.querySelectorAll('.slt-variant-pill').forEach(vp=>vp.classList.remove('selected')); pill.classList.add('selected'); });
           variantContainer.appendChild(pill);
         });
-        if (p.variants.length > 3) { const more = document.createElement('span'); more.className = 'st-variant-more'; more.textContent = `+${p.variants.length-3} more`; variantContainer.appendChild(more); }
+        if (p.variants.length > 3) { const more=document.createElement('span'); more.className='slt-variant-more'; more.textContent=`+${p.variants.length-3} more`; variantContainer.appendChild(more); }
       }
 
-      card.querySelector(`#cqv-${safeId}`).addEventListener('click', () => { const existing = shadow.getElementById('st-qv-active'); if (existing) existing.remove(); const qv = renderQuickView(p); qv.id = 'st-qv-active'; messages.appendChild(qv); messages.scrollTop = messages.scrollHeight; });
-      card.querySelector('.st-card-img-wrap').addEventListener('click', () => { card.querySelector(`#cqv-${safeId}`).click(); });
+      card.querySelector(`#sltcqv-${safeId}`).addEventListener('click', () => { const existing=document.getElementById('slt-qv-active'); if(existing) existing.remove(); const qv=renderQuickView(p); qv.id='slt-qv-active'; messages.appendChild(qv); messages.scrollTop=messages.scrollHeight; });
+      card.querySelector('.slt-card-img-wrap').addEventListener('click', () => { card.querySelector(`#sltcqv-${safeId}`).click(); });
 
-      const addBtn = card.querySelector(`#cadd-${safeId}`);
+      const addBtn = card.querySelector(`#sltcadd-${safeId}`);
       if (p.available) {
         addBtn.addEventListener('click', async function() {
-          this.disabled = true; this.textContent = '...';
-          const numericId = selectedVariantId.replace('gid://shopify/ProductVariant/','');
+          this.disabled=true; this.textContent='...';
+          const numericId=selectedVariantId.replace('gid://shopify/ProductVariant/','');
           try {
-            const r = await fetch('/cart/add.js', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items:[{id:parseInt(numericId),quantity:1}]}) });
-            const data = await r.json();
-            if (data.items) { this.textContent = 'Added ✓'; this.classList.add('st-added'); refreshCartCount(); }
-            else { this.textContent = 'Error'; this.disabled = false; }
-          } catch { this.textContent = 'Error'; this.disabled = false; }
+            const r=await fetch('/cart/add.js',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:[{id:parseInt(numericId),quantity:1}]})});
+            const data=await r.json();
+            if(data.items){this.textContent='Added ✓';this.classList.add('slt-added');refreshCartCount();}
+            else{this.textContent='Error';this.disabled=false;}
+          } catch{this.textContent='Error';this.disabled=false;}
         });
-      } else { addBtn.disabled = true; }
+      } else { addBtn.disabled=true; }
       return card;
     }
 
     function renderQuickView(p) {
-      const panel = document.createElement('div');
-      panel.className = 'st-qv-panel';
-      const images = p.images?.length ? p.images : (p.image ? [p.image] : []);
-      let selectedVariantId = p.variantId;
-      panel.innerHTML = `<img class="st-qv-main" id="st-qv-mainimg" src="${images[0]||''}" alt="${p.title}"/><div class="st-qv-imgs" id="st-qv-thumbs"></div><div class="st-qv-body"><div class="st-qv-title">${p.title}</div><div class="st-card-prices" style="margin-bottom:10px"><span class="st-price">${p.price||''}</span>${p.comparePrice?`<span class="st-compare">${p.comparePrice}</span>`:''}</div><div class="st-qv-desc">${p.description||'No description available.'}</div><div class="st-variants" id="st-qv-vars" style="margin-bottom:12px"></div><button class="st-qv-add" id="st-qv-addbtn">Add to Cart</button><button class="st-qv-close" id="st-qv-closebtn">← Back to results</button></div>`;
-      const mainImg = panel.querySelector('#st-qv-mainimg');
-      const thumbsContainer = panel.querySelector('#st-qv-thumbs');
-      images.forEach((img,i) => { const thumb = document.createElement('img'); thumb.src = img; if(i===0) thumb.classList.add('active'); thumb.addEventListener('click', () => { mainImg.src = img; thumbsContainer.querySelectorAll('img').forEach(t => t.classList.remove('active')); thumb.classList.add('active'); }); thumbsContainer.appendChild(thumb); });
-      const qvVars = panel.querySelector('#st-qv-vars');
-      if (p.variants.length > 1) { p.variants.forEach((v,i) => { const pill = document.createElement('button'); pill.className = 'st-variant-pill'+(i===0?' selected':''); pill.textContent = v.title; if(!v.available) pill.style.opacity='0.4'; pill.addEventListener('click', () => { selectedVariantId = v.id; qvVars.querySelectorAll('.st-variant-pill').forEach(vp => vp.classList.remove('selected')); pill.classList.add('selected'); }); qvVars.appendChild(pill); }); }
-      const addBtn = panel.querySelector('#st-qv-addbtn');
-      addBtn.addEventListener('click', async function() {
-        this.disabled = true; this.textContent = '...';
-        const numericId = selectedVariantId.replace('gid://shopify/ProductVariant/','');
-        try {
-          const r = await fetch('/cart/add.js', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items:[{id:parseInt(numericId),quantity:1}]}) });
-          const data = await r.json();
-          if (data.items) { this.textContent = 'Added to Cart ✓'; this.classList.add('st-added'); refreshCartCount(); }
-          else { this.textContent = 'Error — try again'; this.disabled = false; }
-        } catch { this.textContent = 'Error — try again'; this.disabled = false; }
+      const panel=document.createElement('div');
+      panel.className='slt-qv-panel';
+      const images=p.images?.length?p.images:(p.image?[p.image]:[]);
+      let selectedVariantId=p.variantId;
+      panel.innerHTML=`<img class="slt-qv-main" id="slt-qv-mainimg" src="${images[0]||''}" alt="${p.title}"/><div class="slt-qv-imgs" id="slt-qv-thumbs"></div><div class="slt-qv-body"><div class="slt-qv-title">${p.title}</div><div class="slt-card-prices" style="margin-bottom:10px"><span class="slt-price">${p.price||''}</span>${p.comparePrice?`<span class="slt-compare">${p.comparePrice}</span>`:''}</div><div class="slt-qv-desc">${p.description||'No description available.'}</div><div class="slt-variants" id="slt-qv-vars" style="margin-bottom:12px"></div><button class="slt-qv-add" id="slt-qv-addbtn">Add to Cart</button><button class="slt-qv-close" id="slt-qv-closebtn">← Back to results</button></div>`;
+      const mainImg=panel.querySelector('#slt-qv-mainimg');
+      const thumbsContainer=panel.querySelector('#slt-qv-thumbs');
+      images.forEach((img,i)=>{const thumb=document.createElement('img');thumb.src=img;if(i===0)thumb.classList.add('active');thumb.addEventListener('click',()=>{mainImg.src=img;thumbsContainer.querySelectorAll('img').forEach(t=>t.classList.remove('active'));thumb.classList.add('active');});thumbsContainer.appendChild(thumb);});
+      const qvVars=panel.querySelector('#slt-qv-vars');
+      if(p.variants.length>1){p.variants.forEach((v,i)=>{const pill=document.createElement('button');pill.className='slt-variant-pill'+(i===0?' selected':'');pill.textContent=v.title;if(!v.available)pill.style.opacity='0.4';pill.addEventListener('click',()=>{selectedVariantId=v.id;qvVars.querySelectorAll('.slt-variant-pill').forEach(vp=>vp.classList.remove('selected'));pill.classList.add('selected');});qvVars.appendChild(pill);});}
+      const addBtn=panel.querySelector('#slt-qv-addbtn');
+      addBtn.addEventListener('click',async function(){
+        this.disabled=true;this.textContent='...';
+        const numericId=selectedVariantId.replace('gid://shopify/ProductVariant/','');
+        try{const r=await fetch('/cart/add.js',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:[{id:parseInt(numericId),quantity:1}]})});const data=await r.json();if(data.items){this.textContent='Added to Cart ✓';this.classList.add('slt-added');refreshCartCount();}else{this.textContent='Error — try again';this.disabled=false;}}catch{this.textContent='Error — try again';this.disabled=false;}
       });
-      panel.querySelector('#st-qv-closebtn').addEventListener('click', () => panel.remove());
+      panel.querySelector('#slt-qv-closebtn').addEventListener('click',()=>panel.remove());
       return panel;
     }
 
-    function createLoadMoreBtn(query, cursor) {
-      const btn = document.createElement('button');
-      btn.className = 'st-load-more';
-      btn.textContent = 'Show more results';
-      btn.addEventListener('click', async () => {
-        btn.textContent = 'Loading...'; btn.disabled = true;
-        try {
-          const r = await fetch(API_URL+'/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shop:SHOP,message:query,cursor}) });
-          const data = await r.json();
-          if (data.products?.length) {
-            btn.closest('.st-load-more-wrap')?.remove();
-            const slider = messages.querySelector('.st-slider');
-            if (slider) { data.products.forEach(p => { lastProducts.push(p); slider.appendChild(createProductCard(p)); }); if (data.cursor) { const wrap = document.createElement('div'); wrap.className = 'st-load-more-wrap'; wrap.appendChild(createLoadMoreBtn(query,data.cursor)); slider.closest('.st-products').appendChild(wrap); } }
-            messages.scrollTop = messages.scrollHeight;
-          } else { btn.textContent = 'No more results'; }
-        } catch { btn.textContent = 'Error — try again'; btn.disabled = false; }
+    function createLoadMoreBtn(query,cursor){
+      const btn=document.createElement('button');
+      btn.className='slt-load-more';btn.textContent='Show more results';
+      btn.addEventListener('click',async()=>{
+        btn.textContent='Loading...';btn.disabled=true;
+        try{const r=await fetch(API_URL+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop:SHOP,message:query,cursor})});const data=await r.json();if(data.products?.length){btn.closest('.slt-load-more-wrap')?.remove();const slider=messages.querySelector('.slt-slider');if(slider){data.products.forEach(p=>{lastProducts.push(p);slider.appendChild(createProductCard(p));});if(data.cursor){const wrap=document.createElement('div');wrap.className='slt-load-more-wrap';wrap.appendChild(createLoadMoreBtn(query,data.cursor));slider.closest('.slt-products').appendChild(wrap);}}messages.scrollTop=messages.scrollHeight;}else{btn.textContent='No more results';}}catch{btn.textContent='Error — try again';btn.disabled=false;}
       });
       return btn;
     }
 
-    function rebuildSlider(products, sliderEl) {
-      sliderEl.innerHTML = '';
-      products.forEach(p => sliderEl.appendChild(createProductCard(p)));
-    }
+    function rebuildSlider(products,sliderEl){sliderEl.innerHTML='';products.forEach(p=>sliderEl.appendChild(createProductCard(p)));}
 
-    function renderProducts(products, query, cursor) {
-      if (!products.length) return;
-      lastProducts = products; currentSort = 'default';
-      const wrapper = document.createElement('div');
-      wrapper.className = 'st-products';
-      const filterBar = document.createElement('div');
-      filterBar.className = 'st-filter-bar';
-      [{ label:'Price ↑', value:'price-asc' },{ label:'Price ↓', value:'price-desc' },{ label:'In stock', value:'in-stock' }].forEach(f => {
-        const btn = document.createElement('button');
-        btn.className = 'st-filter-btn'; btn.textContent = f.label;
-        btn.addEventListener('click', () => {
-          const isActive = btn.classList.contains('active');
-          filterBar.querySelectorAll('.st-filter-btn').forEach(b => b.classList.remove('active'));
-          if (isActive) { currentSort = 'default'; rebuildSlider(lastProducts, sliderEl); }
-          else { btn.classList.add('active'); currentSort = f.value; let filtered = [...lastProducts]; if (f.value==='in-stock') filtered = filtered.filter(p => p.available); else filtered = sortProducts(filtered,f.value); rebuildSlider(filtered,sliderEl); }
-        });
+    function renderProducts(products,query,cursor){
+      if(!products.length)return;
+      lastProducts=products;currentSort='default';
+      const wrapper=document.createElement('div');wrapper.className='slt-products';
+      const filterBar=document.createElement('div');filterBar.className='slt-filter-bar';
+      let sliderEl;
+      [{label:'Price ↑',value:'price-asc'},{label:'Price ↓',value:'price-desc'},{label:'In stock',value:'in-stock'}].forEach(f=>{
+        const btn=document.createElement('button');btn.className='slt-filter-btn';btn.textContent=f.label;
+        btn.addEventListener('click',()=>{const isActive=btn.classList.contains('active');filterBar.querySelectorAll('.slt-filter-btn').forEach(b=>b.classList.remove('active'));if(isActive){currentSort='default';rebuildSlider(lastProducts,sliderEl);}else{btn.classList.add('active');currentSort=f.value;let filtered=[...lastProducts];if(f.value==='in-stock')filtered=filtered.filter(p=>p.available);else filtered=sortProducts(filtered,f.value);rebuildSlider(filtered,sliderEl);}});
         filterBar.appendChild(btn);
       });
       wrapper.appendChild(filterBar);
-      const sliderWrap = document.createElement('div');
-      sliderWrap.className = 'st-slider-wrap';
-      const prevBtn = document.createElement('button');
-      prevBtn.className = 'st-slider-btn st-slider-prev'; prevBtn.innerHTML = '&#8249;';
-      const nextBtn = document.createElement('button');
-      nextBtn.className = 'st-slider-btn st-slider-next'; nextBtn.innerHTML = '&#8250;';
-      const sliderEl = document.createElement('div');
-      sliderEl.className = 'st-slider';
-      products.forEach(p => sliderEl.appendChild(createProductCard(p)));
-      prevBtn.addEventListener('click', () => sliderEl.scrollBy({left:-185,behavior:'smooth'}));
-      nextBtn.addEventListener('click', () => sliderEl.scrollBy({left:185,behavior:'smooth'}));
+      const sliderWrap=document.createElement('div');sliderWrap.className='slt-slider-wrap';
+      const prevBtn=document.createElement('button');prevBtn.className='slt-slider-btn slt-slider-prev';prevBtn.innerHTML='&#8249;';
+      const nextBtn=document.createElement('button');nextBtn.className='slt-slider-btn slt-slider-next';nextBtn.innerHTML='&#8250;';
+      sliderEl=document.createElement('div');sliderEl.className='slt-slider';
+      products.forEach(p=>sliderEl.appendChild(createProductCard(p)));
+      prevBtn.addEventListener('click',()=>sliderEl.scrollBy({left:-185,behavior:'smooth'}));
+      nextBtn.addEventListener('click',()=>sliderEl.scrollBy({left:185,behavior:'smooth'}));
       let isDown=false,startX,scrollLeft;
-      sliderEl.addEventListener('mousedown', e => { isDown=true; startX=e.pageX-sliderEl.offsetLeft; scrollLeft=sliderEl.scrollLeft; });
-      sliderEl.addEventListener('mouseleave', () => { isDown=false; });
-      sliderEl.addEventListener('mouseup', () => { isDown=false; });
-      sliderEl.addEventListener('mousemove', e => { if(!isDown) return; e.preventDefault(); sliderEl.scrollLeft = scrollLeft-(e.pageX-sliderEl.offsetLeft-startX)*1.5; });
-      sliderWrap.appendChild(prevBtn); sliderWrap.appendChild(sliderEl); sliderWrap.appendChild(nextBtn);
+      sliderEl.addEventListener('mousedown',e=>{isDown=true;startX=e.pageX-sliderEl.offsetLeft;scrollLeft=sliderEl.scrollLeft;});
+      sliderEl.addEventListener('mouseleave',()=>{isDown=false;});
+      sliderEl.addEventListener('mouseup',()=>{isDown=false;});
+      sliderEl.addEventListener('mousemove',e=>{if(!isDown)return;e.preventDefault();sliderEl.scrollLeft=scrollLeft-(e.pageX-sliderEl.offsetLeft-startX)*1.5;});
+      sliderWrap.appendChild(prevBtn);sliderWrap.appendChild(sliderEl);sliderWrap.appendChild(nextBtn);
       wrapper.appendChild(sliderWrap);
-      if (cursor) { const wrap = document.createElement('div'); wrap.className = 'st-load-more-wrap'; wrap.appendChild(createLoadMoreBtn(query,cursor)); wrapper.appendChild(wrap); }
-      messages.appendChild(wrapper);
-      messages.scrollTop = messages.scrollHeight;
+      if(cursor){const wrap=document.createElement('div');wrap.className='slt-load-more-wrap';wrap.appendChild(createLoadMoreBtn(query,cursor));wrapper.appendChild(wrap);}
+      messages.appendChild(wrapper);messages.scrollTop=messages.scrollHeight;
     }
 
-    function renderFollowUpChips(chips) {
-      if (!chips?.length) return;
-      const wrapper = document.createElement('div');
-      wrapper.className = 'st-follow-chips';
-      chips.forEach(chip => { const btn = document.createElement('button'); btn.className = 'st-follow-chip'; btn.textContent = chip; btn.addEventListener('click', () => { wrapper.remove(); sendMessage(chip); }); wrapper.appendChild(btn); });
-      messages.appendChild(wrapper);
-      messages.scrollTop = messages.scrollHeight;
+    function renderFollowUpChips(chips){
+      if(!chips?.length)return;
+      const wrapper=document.createElement('div');wrapper.className='slt-follow-chips';
+      chips.forEach(chip=>{const btn=document.createElement('button');btn.className='slt-follow-chip';btn.textContent=chip;btn.addEventListener('click',()=>{wrapper.remove();sendMessage(chip);});wrapper.appendChild(btn);});
+      messages.appendChild(wrapper);messages.scrollTop=messages.scrollHeight;
     }
 
-    async function sendMessage(text) {
-      if (!text.trim()) return;
-      chipsContainer.innerHTML = '';
-      addUserMessage(text); input.value = ''; sendBtn.disabled = true; showTyping();
-      try {
-        const r = await fetch(API_URL+'/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shop:SHOP,message:text}) });
-        const data = await r.json();
-        hideTyping(); addBotMessage(data.reply);
-        if (data.products?.length) { renderProducts(data.products,data.searchQuery,data.cursor); if (data.followUpChips?.length) renderFollowUpChips(data.followUpChips); }
-        if (data.promptChips?.length) renderChips(data.promptChips);
-      } catch { hideTyping(); addBotMessage('Sorry, something went wrong. Please try again.'); }
-      finally { sendBtn.disabled = false; }
+    async function sendMessage(text){
+      if(!text.trim())return;
+      chipsContainer.innerHTML='';
+      addUserMessage(text);input.value='';sendBtn.disabled=true;showTyping();
+      try{
+        const r=await fetch(API_URL+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop:SHOP,message:text})});
+        const data=await r.json();
+        hideTyping();addBotMessage(data.reply);
+        if(data.products?.length){renderProducts(data.products,data.searchQuery,data.cursor);if(data.followUpChips?.length)renderFollowUpChips(data.followUpChips);}
+        if(data.promptChips?.length)renderChips(data.promptChips);
+      }catch{hideTyping();addBotMessage('Sorry, something went wrong. Please try again.');}
+      finally{sendBtn.disabled=false;}
     }
 
-    sendBtn.addEventListener('click', () => sendMessage(input.value));
-    input.addEventListener('keydown', e => { if (e.key==='Enter') sendMessage(input.value); });
+    sendBtn.addEventListener('click',()=>sendMessage(input.value));
+    input.addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage(input.value);});
   }
 
-  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', init); }
-  else { init(); }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}
+  else{init();}
 })();
