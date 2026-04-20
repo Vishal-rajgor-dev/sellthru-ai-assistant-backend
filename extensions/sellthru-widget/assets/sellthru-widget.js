@@ -119,14 +119,13 @@
 launcher.id = 'st-launcher';
 launcher.setAttribute('aria-label', 'Open shopping assistant');
 launcher.style.pointerEvents = 'all';
-win.style.pointerEvents = 'all';
-
     launcher.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
     shadow.appendChild(launcher);
 
     const win = document.createElement('div');
-    win.id = 'st-window';
-    win.classList.add('hidden');
+win.id = 'st-window';
+win.classList.add('hidden');
+win.style.pointerEvents = 'all';
     win.innerHTML = '<div id="st-header"><div id="st-header-left"><div id="st-header-dot"></div><span>Shopping Assistant</span></div><button id="st-close">×</button></div><div id="st-messages"></div><div id="st-chips"></div><div id="st-input-row"><input id="st-input" type="text" placeholder="Search products, ask questions..." autocomplete="off"/><button id="st-send">↑</button></div>';
     shadow.appendChild(win);
 
