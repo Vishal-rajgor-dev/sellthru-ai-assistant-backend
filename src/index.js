@@ -94,30 +94,51 @@ function generateSmartChips(context) {
   const types = context.types || [];
   const tags = context.tags || [];
   const titles = context.titles || [];
+  const minPrice = context.minPrice;
+  const maxPrice = context.maxPrice;
 
-  // Add product type chips
+  // Extract keywords from product titles
+  const titleWords = titles
+    .join(' ')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(w => w.length > 4)
+    .filter(w => !['with', 'from', 'this', 'that', 'have', 'your', 'their'].includes(w));
+  const uniqueWords = [...new Set(titleWords)].slice(0, 10);
+
+  // Product type chips
   if (types.length > 0) {
     chips.push(`Show me ${types[0]}`);
     if (types.length > 1) chips.push(`Browse ${types[1]}`);
+  } else if (uniqueWords.length > 0) {
+    // Use title keywords if no product types
+    chips.push(`Show me ${uniqueWords[0]}`);
+    if (uniqueWords.length > 1) chips.push(`Browse ${uniqueWords[1]}`);
   }
 
-  // Add tag-based chips
+  // Tag-based chips
   const usefulTags = tags.filter(t =>
-    !['sale', 'new', 'featured', 'home-page'].includes(t.toLowerCase())
+    !['sale', 'new', 'featured', 'home-page', 'homepage'].includes(t.toLowerCase())
   );
-  if (usefulTags.length > 0) chips.push(`Show me ${usefulTags[0]}`);
+  if (usefulTags.length > 0) chips.push(`${usefulTags[0]} collection`);
+  if (usefulTags.length > 1) chips.push(`Shop ${usefulTags[1]}`);
 
-  // Always add universal chips
+  // Always add these
   chips.push("What's new?");
   chips.push('Best sellers');
 
-  // Add price chip based on product prices in titles
-  const hasPriceInRange = titles.some(t => t.toLowerCase().includes('$'));
-  chips.push('Under $100');
+  // Price chip based on actual product prices
+  if (maxPrice && maxPrice < 50) {
+    chips.push('Under $50');
+  } else if (maxPrice && maxPrice < 100) {
+    chips.push('Under $100');
+  } else if (maxPrice) {
+    chips.push(`Under $${Math.round(maxPrice * 0.5)}`);
+  }
 
-  // Add occasion chip from tags
+  // Occasion tags
   const occasionTags = tags.filter(t =>
-    ['party', 'wedding', 'casual', 'formal', 'summer', 'winter', 'bridal', 'evening'].some(
+    ['party', 'wedding', 'casual', 'formal', 'summer', 'winter', 'bridal', 'evening', 'holiday'].some(
       occ => t.toLowerCase().includes(occ)
     )
   );
