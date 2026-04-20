@@ -95,6 +95,32 @@ router.get('/auth/callback', async (req, res) => {
     // Register script tags
     const appUrl = process.env.APP_URL;
     await registerScriptTag(shop, accessToken, appUrl);
+    // Auto-generate prompt chips from store products
+try {
+  const { getStoreContext } = require('../services/catalogMcp');
+  const context = await getStoreContext(accessToken, shop);
+  if (context) {
+    const { generateSmartChips } = require('../index');
+    // inline the function here since we can't import from index.js
+    const types = context.types || [];
+    const tags = context.tags || [];
+    const chips = [];
+    if (types.length > 0) chips.push(`Show me ${types[0]}`);
+    if (types.length > 1) chips.push(`Browse ${types[1]}`);
+    const usefulTags = tags.filter(t => !['sale','new','featured','home-page'].includes(t.toLowerCase()));
+    if (usefulTags.length > 0) chips.push(`Show me ${usefulTags[0]}`);
+    chips.push("What's new?");
+    chips.push('Best sellers');
+    chips.push('Under $100');
+    const occasionTags = tags.filter(t => ['party','wedding','casual','formal','summer','winter','bridal','evening'].some(occ => t.toLowerCase().includes(occ)));
+    if (occasionTags.length > 0) chips.push(`${occasionTags[0].charAt(0).toUpperCase()+occasionTags[0].slice(1)} styles`);
+    const finalChips = [...new Set(chips)].slice(0, 6);
+    await supabase.from('merchant_config').upsert({ shop, prompt_chips: finalChips });
+    console.log('Auto-generated chips:', finalChips);
+  }
+} catch (e) {
+  console.error('Chip generation error:', e.message);
+}
     console.log('Script tags registered for:', shop);
 
     res.send(`
