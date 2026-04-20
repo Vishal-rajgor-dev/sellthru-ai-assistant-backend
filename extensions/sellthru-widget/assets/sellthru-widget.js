@@ -277,26 +277,12 @@
       if (t) t.remove();
     }
 
-  function refreshCartCount() {
+ function refreshCartCount() {
   fetch('/cart.js')
     .then(r => r.json())
     .then(cart => {
-      // Refresh the entire cart drawer via sections API
-      fetch('/?sections=cart-drawer')
-        .then(r => r.json())
-        .then(sections => {
-          if (sections['cart-drawer']) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(sections['cart-drawer'], 'text/html');
-            const newDrawer = doc.querySelector('cart-drawer');
-            const oldDrawer = document.querySelector('cart-drawer');
-            if (newDrawer && oldDrawer) {
-              oldDrawer.innerHTML = newDrawer.innerHTML;
-            }
-          }
-        }).catch(() => {});
 
-      // Update cart count bubble
+      // Update cart count bubble only — don't touch cart drawer DOM
       fetch('/?sections=header')
         .then(r => r.json())
         .then(sections => {
@@ -312,25 +298,14 @@
           }
         }).catch(() => {});
 
-      // Open cart drawer
-      const cartDrawer = document.querySelector('cart-drawer');
-      if (cartDrawer) {
-        // Try native open method
-        if (typeof cartDrawer.open === 'function') cartDrawer.open();
-        // Dawn theme fallback
-        cartDrawer.classList.add('active', 'is-empty');
-        cartDrawer.removeAttribute('aria-hidden');
-        const overlay = document.querySelector('.drawer__overlay');
-        if (overlay) overlay.classList.add('active');
-      }
-
-      // Close widget so cart is visible
-      isOpen = false;
-      win.classList.add('slt-hidden');
+      // Update count spans directly as backup
+      const count = cart.item_count;
+      document.querySelectorAll(
+        '#cart-icon-bubble span:not(.visually-hidden), .cart-count-bubble span:not(.visually-hidden)'
+      ).forEach(el => { el.textContent = count; });
 
     }).catch(() => {});
 }
-
     function sortProducts(products, sort) {
       const sorted = [...products];
       if (sort === 'price-asc') sorted.sort((a, b) => parseFloat(a.price?.replace('$','') || 0) - parseFloat(b.price?.replace('$','') || 0));
