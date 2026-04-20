@@ -1,5 +1,4 @@
 {
-<<<<<<< HEAD
   "name": "sellthru-backend",
   "version": "1.0.0",
   "description": "SellThru AI Assistant Backend",
@@ -7,14 +6,6 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/index.js"
-=======
-  "name": "backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
->>>>>>> fbd726a (Initial SellThru backend)
   },
   "keywords": [],
   "author": "",
