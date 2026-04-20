@@ -20,8 +20,7 @@
 
     const host = document.createElement('div');
     host.id = 'sellthru-host';
-    host.style.cssText = 'position:fixed;bottom:0;right:0;width:490px;height:720px;z-index:2147483647;pointer-events:none;';
-    document.body.appendChild(host);
+    host.style.cssText = 'position:fixed;bottom:0;right:0;width:490px;height:720px;z-index:2147483647;pointer-events:none;';    document.body.appendChild(host);
     const shadow = host.attachShadow({ mode: 'open' });
 
     const style = document.createElement('style');
@@ -117,8 +116,11 @@
     shadow.appendChild(style);
 
     const launcher = document.createElement('button');
-    launcher.id = 'st-launcher';
-    launcher.setAttribute('aria-label', 'Open shopping assistant');
+launcher.id = 'st-launcher';
+launcher.setAttribute('aria-label', 'Open shopping assistant');
+launcher.style.pointerEvents = 'all';
+win.style.pointerEvents = 'all';
+
     launcher.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
     shadow.appendChild(launcher);
 

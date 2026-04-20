@@ -1,0 +1,18 @@
+name = "Sellthru AI Assistant"
+client_id = "109ce3bdebeba96ba1419d8e6443bf64"
+application_url = "https://sellthru-ai-assistant-backend-production.up.railway.app"
+embedded = false
+
+[access_scopes]
+scopes = "read_products,read_script_tags,write_script_tags"
+
+[auth]
+redirect_urls = [
+  "https://sellthru-ai-assistant-backend-production.up.railway.app/auth/callback"
+]
+
+[webhooks]
+api_version = "2025-01"
+
+[pos]
+embedded = false
