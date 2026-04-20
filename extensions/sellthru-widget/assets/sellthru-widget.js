@@ -281,7 +281,22 @@
   fetch('/cart.js')
     .then(r => r.json())
     .then(cart => {
-      // Method 1 — Shopify section rendering API (most reliable)
+      // Refresh the entire cart drawer via sections API
+      fetch('/?sections=cart-drawer')
+        .then(r => r.json())
+        .then(sections => {
+          if (sections['cart-drawer']) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(sections['cart-drawer'], 'text/html');
+            const newDrawer = doc.querySelector('cart-drawer');
+            const oldDrawer = document.querySelector('cart-drawer');
+            if (newDrawer && oldDrawer) {
+              oldDrawer.innerHTML = newDrawer.innerHTML;
+            }
+          }
+        }).catch(() => {});
+
+      // Update cart count bubble
       fetch('/?sections=header')
         .then(r => r.json())
         .then(sections => {
@@ -297,25 +312,22 @@
           }
         }).catch(() => {});
 
-      // Method 2 — dispatch events for different theme frameworks
-      document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
-      document.dispatchEvent(new CustomEvent('cart:update', { bubbles: true, detail: { cart } }));
+      // Open cart drawer
+      const cartDrawer = document.querySelector('cart-drawer');
+      if (cartDrawer) {
+        // Try native open method
+        if (typeof cartDrawer.open === 'function') cartDrawer.open();
+        // Dawn theme fallback
+        cartDrawer.classList.add('active', 'is-empty');
+        cartDrawer.removeAttribute('aria-hidden');
+        const overlay = document.querySelector('.drawer__overlay');
+        if (overlay) overlay.classList.add('active');
+      }
 
-      // Method 3 — Dawn theme specific
-      document.documentElement.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
+      // Close widget so cart is visible
+      isOpen = false;
+      win.classList.add('slt-hidden');
 
-      // Method 4 — update cart count spans directly
-      const count = cart.item_count;
-      document.querySelectorAll(
-        '#cart-icon-bubble, .cart-count-bubble, [data-cart-count], .cart__count, .cart-count, .icon-cart__bubble'
-      ).forEach(el => {
-        if (el.querySelector('span')) {
-          el.querySelector('span').textContent = count;
-        } else {
-          el.textContent = count;
-        }
-        el.style.display = count > 0 ? '' : 'none';
-      });
     }).catch(() => {});
 }
 
