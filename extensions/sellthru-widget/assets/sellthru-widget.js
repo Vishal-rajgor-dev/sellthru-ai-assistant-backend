@@ -20,16 +20,16 @@
 
     const host = document.createElement('div');
     host.id = 'sellthru-host';
-    host.style.cssText = 'position:fixed;bottom:0;right:0;width:490px;height:720px;z-index:2147483647;pointer-events:none;';    document.body.appendChild(host);
+    host.style.cssText = 'position:fixed;bottom:0;right:0;z-index:2147483647;';
     const shadow = host.attachShadow({ mode: 'open' });
 
     const style = document.createElement('style');
     style.textContent = `
       *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-      #st-launcher{position:absolute;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:${COLOR};border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;pointer-events:all;transition:transform 0.2s;box-shadow:0 4px 16px rgba(0,0,0,0.18)}
+      #st-launcher{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:${COLOR};border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;pointer-events:all;transition:transform 0.2s;box-shadow:0 4px 16px rgba(0,0,0,0.18)}
       #st-launcher:hover{transform:scale(1.08)}
       #st-launcher svg{width:26px;height:26px;fill:white;pointer-events:none}
-      #st-window{position:absolute;bottom:92px;right:24px;width:420px;height:600px;background:#fff;border-radius:20px;border:1px solid #e5e5e5;display:flex;flex-direction:column;overflow:hidden;pointer-events:all;transition:opacity 0.2s,transform 0.2s;box-shadow:0 8px 40px rgba(0,0,0,0.14)}
+      #st-window{position:fixed;bottom:92px;right:24px;width:420px;height:600px;background:#fff;border-radius:20px;border:1px solid #e5e5e5;display:flex;flex-direction:column;overflow:hidden;pointer-events:all;transition:opacity 0.2s,transform 0.2s;box-shadow:0 8px 40px rgba(0,0,0,0.14)}
       #st-window.hidden{opacity:0;pointer-events:none;transform:translateY(12px)}
       #st-header{background:${COLOR};color:#fff;padding:14px 18px;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
       #st-header-left{display:flex;align-items:center;gap:10px}
