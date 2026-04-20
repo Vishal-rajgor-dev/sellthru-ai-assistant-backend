@@ -277,19 +277,47 @@
       if (t) t.remove();
     }
 
-    function refreshCartCount() {
-      fetch('/cart.js').then(r => r.json()).then(() => {
-        fetch('/?sections=header').then(r => r.json()).then(sections => {
+  function refreshCartCount() {
+  fetch('/cart.js')
+    .then(r => r.json())
+    .then(cart => {
+      // Method 1 — Shopify section rendering API (most reliable)
+      fetch('/?sections=header')
+        .then(r => r.json())
+        .then(sections => {
           if (sections.header) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(sections.header, 'text/html');
             const newBubble = doc.querySelector('#cart-icon-bubble');
             const oldBubble = document.querySelector('#cart-icon-bubble');
-            if (newBubble && oldBubble) oldBubble.innerHTML = newBubble.innerHTML;
+            if (newBubble && oldBubble) {
+              oldBubble.innerHTML = newBubble.innerHTML;
+              oldBubble.classList.remove('hidden');
+            }
           }
         }).catch(() => {});
-      }).catch(() => {});
-    }
+
+      // Method 2 — dispatch events for different theme frameworks
+      document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
+      document.dispatchEvent(new CustomEvent('cart:update', { bubbles: true, detail: { cart } }));
+
+      // Method 3 — Dawn theme specific
+      document.documentElement.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
+
+      // Method 4 — update cart count spans directly
+      const count = cart.item_count;
+      document.querySelectorAll(
+        '#cart-icon-bubble, .cart-count-bubble, [data-cart-count], .cart__count, .cart-count, .icon-cart__bubble'
+      ).forEach(el => {
+        if (el.querySelector('span')) {
+          el.querySelector('span').textContent = count;
+        } else {
+          el.textContent = count;
+        }
+        el.style.display = count > 0 ? '' : 'none';
+      });
+    }).catch(() => {});
+}
 
     function sortProducts(products, sort) {
       const sorted = [...products];
@@ -516,8 +544,9 @@
       chipsContainer.innerHTML='';
       addUserMessage(text);
 
-      // Add to conversation history
-      conversationHistory.push({ role: 'user', content: text });
+     // Add to conversation history with search context
+const userContent = selectedSize ? `${text} (size preference: ${selectedSize})` : text;
+conversationHistory.push({ role: 'user', content: userContent });
 
       // Append size filter to query if set
       const queryWithSize = selectedSize ? `${text} in size ${selectedSize}` : text;
@@ -537,8 +566,11 @@
         hideTyping();
         addBotMessage(data.reply);
 
-        // Add assistant response to history
-        conversationHistory.push({ role: 'assistant', content: data.reply });
+        // Add assistant response to history including what was searched
+const assistantContent = data.searchQuery 
+  ? `${data.reply} [Found products for: ${data.searchQuery}]`
+  : data.reply;
+conversationHistory.push({ role: 'assistant', content: assistantContent });
 
         if(data.products?.length){
           renderProducts(data.products,data.searchQuery||text,data.cursor);
