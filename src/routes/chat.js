@@ -139,7 +139,9 @@ Be concise, warm and helpful.`
       model: 'gpt-4o-mini',
       messages: conversationMessages,
       tools,
-      tool_choice: 'auto'
+tool_choice: message.match(/show|find|search|dress|clothes|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift/i) 
+  ? { type: 'function', function: { name: 'search_products' } }
+  : 'auto'
     });
 
     const responseMessage = completion.choices[0].message;

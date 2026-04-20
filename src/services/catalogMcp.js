@@ -82,51 +82,53 @@ async function getStoreContext(accessToken, shop) {
   try {
     await client.connect(transport);
 
-    // Use broad queries to get a sample of products
-    const result = await client.callTool({
-      name: 'search_catalog',
-      arguments: {
-        catalog: {
-          query: 'product',
-          pagination: { limit: 20 }
+    // Try multiple queries to get a good sample of products
+    const queries = ['dress', 'top', 'collection', 'style', 'wear'];
+    let allProducts = [];
+
+    for (const q of queries) {
+      try {
+        const result = await client.callTool({
+          name: 'search_catalog',
+          arguments: {
+            catalog: {
+              query: q,
+              pagination: { limit: 10 }
+            }
+          }
+        });
+        const content = result.content?.[0]?.text;
+        if (content) {
+          const parsed = JSON.parse(content);
+          const products = parsed.catalog?.items || parsed.items || [];
+          allProducts = [...allProducts, ...products];
+          if (allProducts.length >= 15) break;
         }
+      } catch (e) {
+        continue;
       }
-    });
+    }
 
     await client.close();
 
-    const content = result.content?.[0]?.text;
-    if (!content) return null;
+    if (!allProducts.length) return null;
 
-    const parsed = JSON.parse(content);
-    const products = parsed.catalog?.items || parsed.items || [];
+    // Deduplicate by id
+    const seen = new Set();
+    const unique = allProducts.filter(p => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
 
-    if (!products.length) return null;
-
-    // Extract unique product types
-    const types = [...new Set(
-      products.map(p => p.product_type || p.productType).filter(Boolean)
-    )];
-
-    // Extract titles
-    const titles = products.slice(0, 8).map(p => p.title).filter(Boolean);
-
-    // Extract all tags
-    const tags = [...new Set(
-      products.flatMap(p => p.tags || []).filter(Boolean)
-    )].slice(0, 20);
-
-    // Extract price ranges
-    const prices = products
-      .map(p => p.price_range?.min?.amount)
-      .filter(Boolean)
-      .map(p => Math.round(p / 100));
-
+    const types = [...new Set(unique.map(p => p.product_type || p.productType).filter(Boolean))];
+    const titles = unique.slice(0, 10).map(p => p.title).filter(Boolean);
+    const tags = [...new Set(unique.flatMap(p => p.tags || []).filter(Boolean))].slice(0, 20);
+    const prices = unique.map(p => p.price_range?.min?.amount).filter(Boolean).map(p => Math.round(p / 100));
     const minPrice = prices.length ? Math.min(...prices) : null;
     const maxPrice = prices.length ? Math.max(...prices) : null;
 
-    console.log('Store context:', { types, titles: titles.length, tags: tags.slice(0,5), minPrice, maxPrice });
-
+    console.log('Store context found:', { typesCount: types.length, titlesCount: titles.length, tagsCount: tags.length });
     return { types, titles, tags, minPrice, maxPrice };
 
   } catch (err) {
