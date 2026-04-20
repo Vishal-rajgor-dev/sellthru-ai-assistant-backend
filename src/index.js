@@ -2,64 +2,54 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const path = require('path');
+const supabase = require('./config/supabase');
+
 const authRoutes = require('./routes/auth');
 const chatRoutes = require('./routes/chat');
 const cartRoutes = require('./routes/cart');
-const { listTools } = require('./services/catalogMcp');
-const supabase = require('./config/supabase');
-const path = require('path');
-
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-// Routes
 app.use('/', authRoutes);
-app.use('/', chatRoutes);                      
+app.use('/', chatRoutes);
 app.use('/', cartRoutes);
 app.use('/widget', express.static(path.join(__dirname, 'widget')));
-// Health check
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'SellThru backend is running' });
 });
 
+app.get('/api/widget/config', async (req, res) => {
+  const shop = req.query.shop;
+  if (!shop) return res.json({ enabled: false });
+
+  const { data } = await supabase
+    .from('merchant_config')
+    .select('widget_enabled, widget_position, primary_color, widget_greeting, prompt_chips')
+    .eq('shop', shop)
+    .single();
+
+  res.json({
+    enabled: data?.widget_enabled ?? true,
+    position: data?.widget_position || 'bottom-right',
+    color: data?.primary_color || '#000000',
+    greeting: data?.widget_greeting || 'Hi! How can I help you find something today?',
+    promptChips: data?.prompt_chips || ['What\'s new?', 'Best sellers', 'Under $100', 'Gifts']
+  });
+});
 
 app.get('/widget/config.js', (req, res) => {
   const shop = req.query.shop;
   res.setHeader('Content-Type', 'application/javascript');
-  res.send(`
-    window.sellthruConfig = {
-      shop: '${shop}',
-      apiUrl: '${process.env.APP_URL}',
-      greeting: 'Hi! How can I help you find something today?',
-      promptChips: ["What's new?", "Best sellers", "Gifts under $50"]
-    };
-  `);
+  res.send(`window.sellthruShop="${shop}";window.sellthruApiUrl="${process.env.APP_URL}";`);
 });
-app.get('/test-mcp', async (req, res) => {
-  const { data: session } = await supabase
-    .from('sessions')
-    .select('access_token')
-    .eq('shop', 'sellthru-ai-assistance.myshopify.com')
-    .single();
 
-  const tools = await listTools(session.access_token, 'sellthru-ai-assistance.myshopify.com');
-  res.json(tools);
-});
-app.get('/check-token', async (req, res) => {
-  const { data } = await supabase
-    .from('sessions')
-    .select('access_token, shop')
-    .eq('shop', 'sellthru-ai-assistance.myshopify.com')
-    .single();
-  res.json({ token: data?.access_token });
-});
-// Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
