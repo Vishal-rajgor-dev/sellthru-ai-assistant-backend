@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SellThru Widget Test</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; background: #f9f9f9; }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    p { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Test Store Page</h1>
+  <p>This simulates a Shopify storefront. Click the chat button in the bottom right.</p>
+
+  <script>
+    window.sellthruConfig = {
+      shop: 'sellthru-ai-assistance.myshopify.com',
+      apiUrl: 'http://localhost:3000',
+      greeting: 'Hi! Looking for a snowboard today?',
+      promptChips: ["Show me snowboards", "Best sellers", "Under $700"]
+    };
+  </script>
+  <script src="http://localhost:3000/widget/widget.js"></script>
+</body>
+</html>

@@ -1,0 +1,249 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+#sellthru-launcher {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #000;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999999;
+  transition: transform 0.2s;
+}
+
+#sellthru-launcher:hover {
+  transform: scale(1.08);
+}
+
+#sellthru-launcher svg {
+  width: 24px;
+  height: 24px;
+  fill: white;
+}
+
+#sellthru-window {
+  position: fixed;
+  bottom: 88px;
+  right: 24px;
+  width: 380px;
+  height: 560px;
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #e5e5e5;
+  display: flex;
+  flex-direction: column;
+  z-index: 999998;
+  overflow: hidden;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+#sellthru-window.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
+
+#sellthru-header {
+  background: #000;
+  color: #fff;
+  padding: 14px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#sellthru-header button {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0;
+}
+
+#sellthru-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.st-msg {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.st-msg.bot {
+  background: #f4f4f4;
+  color: #111;
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+
+.st-msg.user {
+  background: #000;
+  color: #fff;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+
+.st-typing {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 10px 14px;
+  background: #f4f4f4;
+  border-radius: 12px;
+  border-bottom-left-radius: 4px;
+  align-self: flex-start;
+  width: fit-content;
+}
+
+.st-typing span {
+  width: 6px;
+  height: 6px;
+  background: #999;
+  border-radius: 50%;
+  animation: bounce 1.2s infinite;
+}
+
+.st-typing span:nth-child(2) { animation-delay: 0.2s; }
+.st-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-5px); }
+}
+
+.st-products {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.st-product-card {
+  display: flex;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  padding: 10px;
+  align-items: center;
+}
+
+.st-product-card img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #f4f4f4;
+}
+
+.st-product-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.st-product-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #111;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-product-price {
+  font-size: 13px;
+  color: #555;
+  margin-top: 2px;
+}
+
+.st-add-btn {
+  background: #000;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.st-add-btn:hover { background: #333; }
+.st-add-btn:disabled { background: #999; cursor: default; }
+.st-add-btn.added { background: #1a7a4a; }
+
+.st-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 8px;
+}
+
+.st-chip {
+  background: #f4f4f4;
+  border: 1px solid #e5e5e5;
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.st-chip:hover { background: #e8e8e8; }
+
+#sellthru-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e5e5e5;
+}
+
+#sellthru-input {
+  flex: 1;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+#sellthru-input:focus { border-color: #000; }
+
+#sellthru-send {
+  background: #000;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#sellthru-send:hover { background: #333; }
+#sellthru-send:disabled { background: #ccc; cursor: default; }
