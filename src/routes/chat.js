@@ -58,7 +58,7 @@ function formatProduct(p) {
 }
 
 router.post('/api/chat', async (req, res) => {
-  const { shop, message, cursor, maxPrice, minPrice } = req.body;
+  const { shop, message, cursor, maxPrice, minPrice, history = [] } = req.body;
 
   if (!shop || !message) {
     return res.status(400).json({ error: 'Missing shop or message' });
@@ -98,32 +98,46 @@ Common tags: ${context.tags.join(', ')}`;
     storeContext = '';
   }
 
+  // Build conversation messages with full history
+  const systemPrompt = {
+    role: 'system',
+    content: `You are a stylish and knowledgeable shopping assistant for a fashion store.
+${storeContext}
+
+Your personality:
+- Warm, friendly and fashion-forward
+- Give brief styling tips alongside product recommendations
+- Remember what the shopper asked earlier in the conversation
+- Use context from previous messages — if they said "show me red ones" you know what category they mean
+
+Your job:
+- ALWAYS use search_products tool for any product question
+- Map "best sellers" → search "popular products"
+- Map "new arrivals" → search "new arrivals"  
+- Map "under $X" → include price in query
+- Map "gifts" → search "gift ideas"
+- For follow-ups like "show me those in red" or "what about in size 10" → combine with previous search context
+- For greetings only → respond warmly without searching
+
+Response style:
+- 1-2 sentences max before showing products
+- Add a brief styling tip when relevant e.g. "These maxi dresses are perfect for parties — style with heels and statement earrings"
+- Never say you can't help — always try to search first
+
+Be concise, warm and helpful.`
+  };
+
+  // Build messages array with conversation history
+  const conversationMessages = [
+    systemPrompt,
+    ...history.slice(-10), // Keep last 10 messages for context window
+    { role: 'user', content: message }
+  ];
+
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `You are a helpful shopping assistant for a Shopify store.
-${storeContext}
-
-Your job is to help shoppers find products from THIS store only.
-ALWAYS use the search_products tool when shoppers ask about products.
-
-Rules:
-- Map "best sellers" or "popular" → search "popular products"
-- Map "new arrivals" or "what's new" → search "new arrivals"
-- Map "under $X" or "below $X" → pass the price in the query
-- Map "gifts" → search "gift ideas"
-- For ANY product question → use search_products tool
-- For greetings only (hi, hello) → respond warmly without searching
-- Never mention products outside this store
-- Never assume what the store sells — use the context above
-
-Be friendly, helpful and concise.`
-        },
-        { role: 'user', content: message }
-      ],
+      messages: conversationMessages,
       tools,
       tool_choice: 'auto'
     });
@@ -144,7 +158,8 @@ Be friendly, helpful and concise.`
         return res.json({
           reply: 'Sorry, search is unavailable right now. Please try again.',
           products: [],
-          cursor: null
+          cursor: null,
+          searchQuery: args.query
         });
       }
 
@@ -156,22 +171,31 @@ Be friendly, helpful and concise.`
         query: args.query
       });
 
-      const followUpChips = formatted.length > 0 ? [
+      // Generate a fashion-aware reply using the tool call result
+      let reply = '';
+      if (responseMessage.content) {
+        reply = responseMessage.content;
+      } else if (formatted.length > 0) {
+        reply = `Here are ${formatted.length} styles I found for you:`;
+      } else {
+        reply = `Sorry, I couldn't find anything for "${args.query}". Try a different search.`;
+      }
+
+      // Contextual refine chips based on search
+      const refineChips = formatted.length > 0 ? [
         'Show cheaper options',
-        'Sort by price: low to high',
-        'Show more results',
-        'Show something different'
+        'Show most expensive',
+        'Show something different',
+        'What goes with these?'
       ] : [];
 
       res.json({
-        reply: formatted.length > 0
-          ? `Here are ${formatted.length} products I found for "${args.query}":`
-          : `Sorry, I couldn't find anything for "${args.query}". Try a different search.`,
+        reply,
         searchQuery: args.query,
         products: formatted,
         cursor: result.cursor,
         promptChips: config?.prompt_chips || [],
-        followUpChips
+        refineChips
       });
 
     } else {
