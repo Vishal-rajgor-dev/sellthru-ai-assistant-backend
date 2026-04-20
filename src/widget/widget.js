@@ -248,12 +248,14 @@
     }
 
     function addBotMessage(text) {
-      const div = document.createElement('div');
-      div.className = 'slt-msg slt-bot';
-      div.textContent = text;
-      messages.appendChild(div);
-      messages.scrollTop = messages.scrollHeight;
-    }
+  const div = document.createElement('div');
+  div.className = 'slt-msg slt-bot';
+  div.textContent = text;
+  messages.appendChild(div);
+  setTimeout(() => {
+    div.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 50);
+}
 
     function addUserMessage(text) {
       const div = document.createElement('div');
