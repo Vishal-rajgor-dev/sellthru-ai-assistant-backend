@@ -17,17 +17,12 @@ function createClient(accessToken, shop) {
   return { client, transport };
 }
 
-<<<<<<< HEAD
 async function searchProducts(accessToken, shop, query, options = {}) {
-=======
-async function searchProducts(accessToken, shop, query) {
->>>>>>> fbd726a (Initial SellThru backend)
   const { client, transport } = createClient(accessToken, shop);
 
   try {
     await client.connect(transport);
 
-<<<<<<< HEAD
     const priceMatch = query.match(/under\s*\$?(\d+)|below\s*\$?(\d+)|less\s*than\s*\$?(\d+)/i);
     const maxPrice = priceMatch
       ? parseInt(priceMatch[1] || priceMatch[2] || priceMatch[3]) * 100
@@ -44,9 +39,7 @@ async function searchProducts(accessToken, shop, query) {
       pagination: { limit: options.limit || 6 }
     };
 
-    if (options.cursor) {
-      catalogArgs.pagination.cursor = options.cursor;
-    }
+    if (options.cursor) catalogArgs.pagination.cursor = options.cursor;
 
     if (maxPrice || options.maxPrice) {
       catalogArgs.filters = { price: { max: options.maxPrice || maxPrice } };
@@ -63,39 +56,19 @@ async function searchProducts(accessToken, shop, query) {
     const result = await client.callTool({
       name: 'search_catalog',
       arguments: { catalog: catalogArgs }
-=======
-    const result = await client.callTool({
-      name: 'search_catalog',
-      arguments: {
-        catalog: {
-          query: query,
-          pagination: { limit: 6 }
-        }
-      }
->>>>>>> fbd726a (Initial SellThru backend)
     });
 
     await client.close();
 
     const content = result.content?.[0]?.text;
-<<<<<<< HEAD
     if (!content) return { products: [], cursor: null };
 
     const parsed = JSON.parse(content);
     const products = parsed.catalog?.items || parsed.items || parsed.products || parsed || [];
     const cursor = parsed.catalog?.pagination?.cursor || parsed.pagination?.cursor || null;
 
-    console.log('Products found:', products.length, '| cursor:', cursor ? 'yes' : 'no');
+    console.log('Products found:', products.length);
     return { products, cursor };
-=======
-    if (!content) return [];
-
-    const parsed = JSON.parse(content);
-
-    // Extract products array from UCP response
-    const products = parsed.catalog?.items || parsed.items || parsed.products || parsed || [];
-    return products;
->>>>>>> fbd726a (Initial SellThru backend)
 
   } catch (err) {
     console.error('Catalog MCP error:', err.message);
@@ -103,35 +76,20 @@ async function searchProducts(accessToken, shop, query) {
   }
 }
 
-<<<<<<< HEAD
 async function getStoreContext(accessToken, shop) {
-=======
-async function updateCart(accessToken, shop, cartId, variantId, quantity = 1) {
->>>>>>> fbd726a (Initial SellThru backend)
   const { client, transport } = createClient(accessToken, shop);
 
   try {
     await client.connect(transport);
 
-<<<<<<< HEAD
     const result = await client.callTool({
       name: 'search_catalog',
       arguments: { catalog: { query: '', pagination: { limit: 10 } } }
-=======
-    const args = cartId
-      ? { cart_id: cartId, add_items: [{ product_variant_id: variantId, quantity }] }
-      : { add_items: [{ product_variant_id: variantId, quantity }] };
-
-    const result = await client.callTool({
-      name: 'update_cart',
-      arguments: args
->>>>>>> fbd726a (Initial SellThru backend)
     });
 
     await client.close();
 
     const content = result.content?.[0]?.text;
-<<<<<<< HEAD
     if (!content) return null;
 
     const parsed = JSON.parse(content);
@@ -159,10 +117,6 @@ async function updateCart(accessToken, shop, cartId, variantId, quantity = 1) {
     await client.close();
     const content = result.content?.[0]?.text;
     return content ? JSON.parse(content) : null;
-=======
-    return content ? JSON.parse(content) : null;
-
->>>>>>> fbd726a (Initial SellThru backend)
   } catch (err) {
     console.error('Cart MCP error:', err.message);
     return null;
@@ -182,8 +136,4 @@ async function listTools(accessToken, shop) {
   }
 }
 
-<<<<<<< HEAD
 module.exports = { searchProducts, getStoreContext, updateCart, listTools };
-=======
-module.exports = { searchProducts, updateCart, listTools };
->>>>>>> fbd726a (Initial SellThru backend)
