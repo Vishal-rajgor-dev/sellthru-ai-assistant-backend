@@ -1,0 +1,21 @@
+<script>
+  window.sellthruShop = "{{ shop.permanent_domain }}";
+  window.sellthruApiUrl = "{{ block.settings.api_url }}";
+</script>
+<script src="{{ 'sellthru-widget.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "SellThru AI Assistant",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "api_url",
+      "label": "API URL",
+      "default": "https://sellthru-ai-assistant-backend-production.up.railway.app",
+      "info": "Your SellThru backend URL"
+    }
+  ]
+}
+{% endschema %}
