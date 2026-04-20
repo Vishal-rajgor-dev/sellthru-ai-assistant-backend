@@ -154,6 +154,20 @@ app.post('/api/refresh-chips', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+app.get('/debug-context', async (req, res) => {
+  const shop = req.query.shop || 'sellthru-ai-assistance.myshopify.com';
+  const { data: session } = await supabase
+    .from('sessions')
+    .select('access_token')
+    .eq('shop', shop)
+    .single();
+
+  if (!session) return res.json({ error: 'No session' });
+
+  const { getStoreContext } = require('./services/catalogMcp');
+  const context = await getStoreContext(session.access_token, shop);
+  res.json(context);
+});
 app.get('/widget/config.js', (req, res) => {
   const shop = req.query.shop;
   res.setHeader('Content-Type', 'application/javascript');
