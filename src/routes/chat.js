@@ -31,6 +31,7 @@ function formatProduct(p) {
   return {
     id: p.id,
     title: p.title,
+    handle: p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''),
     description: p.description?.html
       ? p.description.html.replace(/<[^>]*>/g, '').substring(0, 300)
       : '',
@@ -53,7 +54,8 @@ function formatProduct(p) {
     options: p.options || [],
     available: (p.variants || []).some(v => v.availability?.available) ?? true,
     tags: p.tags || [],
-    productType: p.product_type || ''
+    productType: p.product_type || '',
+    url: p.url || `/products/${p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
   };
 }
 
@@ -109,24 +111,28 @@ Your personality:
 - Use context from previous messages
 
 Your job:
-- ALWAYS use search_products tool for any product question — never refuse to search
+- ALWAYS use search_products tool for any product question
 - "best sellers" → search "bestsellers"
 - "new arrivals" or "what's new" → search "new in"
 - "under $X" → include price in query
 - "bridesmaid" → search "bridesmaid dresses"
 - "party" → search "party dresses"
+- "what goes with" or "what accessories go with" → search "accessories jewellery shoes bags" NOT more dresses
+- "styling advice" or "how to style" → give outfit styling tips without searching products
 - Follow-ups like "show me those in red" or "black ones" → combine with previous search context
 - Greetings only → respond warmly without searching
 
 Response style:
 - Keep it to 1-2 sentences max
 - Add a brief styling tip when relevant
-- Never say you cannot help — always try to search
+- Never say you cannot help — always try
 
 Be concise, warm and helpful.`
   };
 
-  const isProductQuery = /show|find|search|dress|cloth|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift|party|bride|wedding|sequin|maxi|midi|mini|colour|color|sleeve|formal|casual|black|white|red|blue|pink|size/i.test(message);
+  const isProductQuery = /show|find|search|dress|cloth|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift|party|bride|wedding|sequin|maxi|midi|mini|colour|color|sleeve|formal|casual|black|white|red|blue|pink|size|accessories|shoes|bags|jewellery/i.test(message);
+
+  const isAccessoryQuery = /goes with|go with|accessories|accessori|shoes|bags|jewellery|jewelry|styling|style with/i.test(message);
 
   const conversationMessages = [
     systemPrompt,
@@ -134,7 +140,6 @@ Be concise, warm and helpful.`
     { role: 'user', content: message }
   ];
 
-  // Extract color filter from message
   const colorMatch = message.match(/\b(black|white|red|blue|green|pink|purple|gold|silver|nude|beige|brown|navy|burgundy|cream|ivory|emerald|teal|coral|yellow|orange)\b/i);
   const colorFilter = colorMatch ? colorMatch[1].toLowerCase() : null;
 
@@ -218,7 +223,7 @@ Be concise, warm and helpful.`
               },
               {
                 role: 'user',
-                content: `Customer searched for: "${args.query}". Found ${formatted.length} products including: ${formatted.slice(0, 3).map(p => p.title).join(', ')}. Write a short response.`
+                content: `Customer searched for: "${args.query}". Found ${formatted.length} products including: ${formatted.slice(0, 3).map(p => p.title).join(', ')}. Write a short warm response with a styling tip.`
               }
             ]
           });
@@ -230,11 +235,12 @@ Be concise, warm and helpful.`
         reply = `Sorry, I couldn't find anything for "${args.query}". Try a different search.`;
       }
 
+      // Context-aware refine chips
       const refineChips = formatted.length > 0 ? [
         'Show cheaper options',
         'Show in black',
+        isAccessoryQuery ? 'Show matching dresses' : 'What accessories go with these?',
         'Show something different',
-        'What goes with these?'
       ] : [];
 
       res.json({
@@ -243,7 +249,8 @@ Be concise, warm and helpful.`
         products: formatted,
         cursor: result.cursor,
         promptChips: config?.prompt_chips || [],
-        refineChips
+        refineChips,
+        isAccessorySearch: isAccessoryQuery
       });
 
     } else {

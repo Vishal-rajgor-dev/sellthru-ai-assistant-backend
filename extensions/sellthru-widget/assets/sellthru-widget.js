@@ -89,8 +89,6 @@
       .slt-add{flex:1!important;background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:6px!important;padding:8px 4px!important;font-size:10px!important;font-weight:600!important;cursor:pointer!important;transition:background 0.15s!important}
       .slt-add:disabled{background:#ccc!important;cursor:default!important}
       .slt-add.slt-added{background:#1a7a4a!important}
-      .slt-quick-view{background:#fff!important;color:#333!important;border:1.5px solid #e0e0e0!important;border-radius:6px!important;padding:8px!important;font-size:10px!important;font-weight:500!important;cursor:pointer!important;white-space:nowrap!important;transition:all 0.15s!important}
-      .slt-quick-view:hover{border-color:${COLOR}!important;color:${COLOR}!important}
       .slt-size-picker{display:flex!important;flex-wrap:wrap!important;gap:6px!important;padding:4px 0!important}
       .slt-refine-panel{background:#fffbf0!important;border:1px solid #f0e6c0!important;border-radius:12px!important;padding:12px 14px!important;width:100%!important}
       .slt-refine-title{font-size:12px!important;font-weight:600!important;color:#333!important;margin-bottom:4px!important}
@@ -103,10 +101,12 @@
       .slt-qv-imgs{display:flex!important;gap:6px!important;padding:10px!important;overflow-x:auto!important;background:#f8f8f8!important}
       .slt-qv-imgs img{width:64px!important;height:80px!important;object-fit:cover!important;border-radius:8px!important;border:2px solid transparent!important;cursor:pointer!important;flex-shrink:0!important;transition:border-color 0.15s!important}
       .slt-qv-imgs img.active{border-color:${COLOR}!important}
-      .slt-qv-main{width:100%!important;aspect-ratio:0.75!important;object-fit:cover!important}
+      .slt-qv-main{width:100%!important;aspect-ratio:0.75!important;object-fit:cover!important;cursor:pointer!important}
       .slt-qv-body{padding:14px!important}
       .slt-qv-title{font-size:15px!important;font-weight:700!important;margin-bottom:6px!important;color:#111!important}
       .slt-qv-desc{font-size:12px!important;color:#666!important;line-height:1.6!important;margin-bottom:12px!important}
+      .slt-qv-pdp-link{display:block!important;text-align:center!important;padding:9px!important;font-size:12px!important;color:${COLOR}!important;text-decoration:none!important;margin-bottom:6px!important;border:1px solid ${COLOR}!important;border-radius:9px!important;transition:all 0.15s!important}
+      .slt-qv-pdp-link:hover{background:${COLOR}!important;color:#fff!important}
       .slt-qv-add{width:100%!important;background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:9px!important;padding:12px!important;font-size:14px!important;font-weight:600!important;cursor:pointer!important;margin-bottom:8px!important;transition:background 0.15s!important}
       .slt-qv-add.slt-added{background:#1a7a4a!important}
       .slt-qv-close{width:100%!important;background:none!important;border:1px solid #ddd!important;border-radius:9px!important;padding:10px!important;font-size:13px!important;cursor:pointer!important;color:#555!important}
@@ -125,6 +125,8 @@
       #slt-send{background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:50%!important;width:38px!important;height:38px!important;display:flex!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;transition:background 0.15s!important;flex-shrink:0!important}
       #slt-send:disabled{background:#ccc!important;cursor:default!important}
       #slt-send svg{width:16px!important;height:16px!important;fill:white!important}
+      #slt-hint{font-size:11px!important;color:#aaa!important;padding:0 14px 6px!important;flex-shrink:0!important;display:none!important}
+      #slt-hint.visible{display:block!important}
     `;
     document.head.appendChild(style);
 
@@ -154,6 +156,7 @@
         </div>
       </div>
       <div id="slt-messages"></div>
+      <div id="slt-hint">Type to refine results · Want something new? Try a different search</div>
       <div id="slt-chips"></div>
       <div id="slt-input-row">
         <input id="slt-input" type="text" placeholder="Ask me anything about fashion or products..." autocomplete="off"/>
@@ -177,7 +180,7 @@
     sizeDropdown.appendChild(clearBtn);
     commonSizes.forEach(size => {
       const btn = document.createElement('button');
-      btn.style.cssText = 'border:1.5px solid #ddd;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:500;cursor:pointer;background:#fff;color:#333;transition:all 0.15s;';
+      btn.style.cssText = `border:1.5px solid #ddd;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:500;cursor:pointer;background:#fff;color:#333;transition:all 0.15s;`;
       btn.textContent = size;
       btn.addEventListener('click', () => {
         selectedSize = size;
@@ -202,6 +205,7 @@
     const input = document.getElementById('slt-input');
     const sendBtn = document.getElementById('slt-send');
     const chipsContainer = document.getElementById('slt-chips');
+    const hintEl = document.getElementById('slt-hint');
     const resetBtn = document.getElementById('slt-reset-btn');
     const expandBtn = document.getElementById('slt-expand-btn');
 
@@ -210,6 +214,7 @@
     let lastProducts = [];
     let currentSort = 'default';
     let conversationHistory = [];
+    let hasShownResults = false;
 
     function toggleWidget() {
       isOpen = !isOpen;
@@ -228,6 +233,8 @@
       messages.innerHTML = '';
       conversationHistory = [];
       selectedSize = null;
+      hasShownResults = false;
+      hintEl.classList.remove('visible');
       document.getElementById('slt-size-btn').textContent = 'Size ▾';
       chipsContainer.innerHTML = '';
       addBotMessage(GREETING);
@@ -306,7 +313,6 @@
             '#cart-icon-bubble span:not(.visually-hidden),.cart-count-bubble span:not(.visually-hidden)'
           ).forEach(el => { el.textContent = count; });
 
-          // Open cart using theme's cart icon
           setTimeout(() => {
             const cartIcon = document.getElementById('cart-icon-bubble') ||
               document.querySelector('[data-cart-toggle],[aria-controls="CartDrawer"],[aria-controls="cart-drawer"]');
@@ -329,6 +335,7 @@
       let selectedVariantId = p.variantId;
       let currentImgIndex = 0;
       const images = p.images?.length ? p.images : (p.image ? [p.image] : []);
+      const productUrl = p.url || `/products/${p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
       let saveBadge = '';
       if (p.comparePrice && p.price) {
@@ -365,13 +372,13 @@
         </div>
       `;
 
-      // Make entire card clickable to open quick view
+      // Whole card click opens quick view
       card.addEventListener('click', (e) => {
         if (e.target.closest('.slt-add, .slt-variant-pill, #sltcqv-' + safeId)) return;
         card.querySelector(`#sltcqv-${safeId}`)?.click();
       });
 
-      // Image cycling
+      // Image cycling on hover
       const imgEl = card.querySelector(`#sltcimg-${safeId}`);
       const dots = card.querySelectorAll('.slt-img-dot');
       if (images.length > 1) {
@@ -397,23 +404,19 @@
         let displayVariants = p.variants;
 
         if (selectedSize) {
-          // Only show variants matching selected size
           const sizeMatch = p.variants.filter(v =>
             v.title.toLowerCase().includes(selectedSize.toLowerCase()) ||
             v.options?.some(o => o.label?.toLowerCase().includes(selectedSize.toLowerCase()))
           );
           displayVariants = sizeMatch.length > 0 ? sizeMatch : p.variants.slice(0, 1);
         } else {
-          // No size selected — show first 2 only
           displayVariants = p.variants.slice(0, 2);
         }
 
         displayVariants.forEach((v, i) => {
           const pill = document.createElement('button');
           pill.className = 'slt-variant-pill' + (i === 0 ? ' selected' : '');
-          // Show size label only, not color
-          const sizeLabel = v.options?.find(o => o.name === 'Size')?.label ||
-            v.title.split('/')[0].trim();
+          const sizeLabel = v.options?.find(o => o.name === 'Size')?.label || v.title.split('/')[0].trim();
           pill.textContent = sizeLabel;
           if (!v.available) pill.style.opacity = '0.4';
           pill.addEventListener('click', (e) => {
@@ -439,7 +442,7 @@
         e.stopPropagation();
         const existing = document.getElementById('slt-qv-active');
         if (existing) existing.remove();
-        const qv = renderQuickView(p);
+        const qv = renderQuickView(p, productUrl);
         qv.id = 'slt-qv-active';
         messages.appendChild(qv);
         setTimeout(() => qv.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
@@ -480,11 +483,12 @@
       return card;
     }
 
-    function renderQuickView(p) {
+    function renderQuickView(p, productUrl) {
       const panel = document.createElement('div');
       panel.className = 'slt-qv-panel';
       const images = p.images?.length ? p.images : (p.image ? [p.image] : []);
       let selectedVariantId = p.variantId;
+      const pdpUrl = productUrl || `/products/${p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
       panel.innerHTML = `
         <img class="slt-qv-main" id="slt-qv-mainimg" src="${images[0] || ''}" alt="${p.title}"/>
@@ -498,9 +502,15 @@
           <div class="slt-qv-desc">${p.description || 'No description available.'}</div>
           <div class="slt-variants" id="slt-qv-vars" style="margin-bottom:12px;flex-wrap:wrap;display:flex;gap:6px;"></div>
           <button class="slt-qv-add" id="slt-qv-addbtn">Add to Cart</button>
+          <a href="${pdpUrl}" target="_blank" class="slt-qv-pdp-link">View full product page ↗</a>
           <button class="slt-qv-close" id="slt-qv-closebtn">← Back to results</button>
         </div>
       `;
+
+      // Make main image clickable to PDP
+      panel.querySelector('.slt-qv-main').addEventListener('click', () => {
+        window.open(pdpUrl, '_blank');
+      });
 
       const mainImg = panel.querySelector('#slt-qv-mainimg');
       const thumbsContainer = panel.querySelector('#slt-qv-thumbs');
@@ -606,7 +616,6 @@
       const panel = document.createElement('div');
       panel.className = 'slt-refine-panel';
 
-      // Filter out already-searched terms
       const searchedTerms = conversationHistory
         .filter(m => m.role === 'user')
         .map(m => m.content.toLowerCase());
@@ -660,6 +669,8 @@
       if (!products.length) return;
       lastProducts = products;
       currentSort = 'default';
+      hasShownResults = true;
+      hintEl.classList.add('visible');
 
       const wrapper = document.createElement('div');
       wrapper.className = 'slt-products';
@@ -731,20 +742,20 @@
 
       messages.appendChild(wrapper);
       messages.appendChild(renderRefinePanel(query));
-
       setTimeout(() => wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     }
 
     function renderFollowUpChips(chips) {
       if (!chips?.length) return;
 
-      // Filter out already-searched terms
       const searchedTerms = conversationHistory
         .filter(m => m.role === 'user')
         .map(m => m.content.toLowerCase());
 
       const filtered = chips.filter(chip =>
-        !searchedTerms.some(term => term.includes(chip.toLowerCase().replace('show ', '').replace('in ', '')))
+        !searchedTerms.some(term =>
+          term.includes(chip.toLowerCase().replace('show ', '').replace('in ', '').replace('what ', ''))
+        )
       );
 
       if (!filtered.length) return;
@@ -765,8 +776,8 @@
     async function sendMessage(text) {
       if (!text.trim()) return;
 
-      // Ask size first if not set and it's a first product search
       const isProductSearch = /dress|show|find|style|outfit|party|wedding|bridesmaid|maxi|midi|mini|sequin|wear|look|clothing/i.test(text);
+
       if (!selectedSize && isProductSearch && conversationHistory.length === 0) {
         chipsContainer.innerHTML = '';
         addUserMessage(text);
@@ -785,9 +796,12 @@
             selectedSize = size;
             document.getElementById('slt-size-btn').textContent = `${size} ✕`;
             sizePicker.remove();
-            conversationHistory.push({ role: 'assistant', content: `I'll show you ${size} options!` });
-            const sizeQuery = `${text} in size ${size}`;
-            doSearch(sizeQuery);
+            // Fix 2 — confirmation message after size selection
+            const originalQuery = text.replace(/ in size.*/i, '');
+            const confirmMsg = `Perfect! Showing you ${size} options for "${originalQuery}"...`;
+            addBotMessage(confirmMsg);
+            conversationHistory.push({ role: 'assistant', content: confirmMsg });
+            setTimeout(() => doSearch(`${originalQuery} in size ${size}`), 600);
           });
           sizePicker.appendChild(btn);
         });
@@ -806,7 +820,9 @@
         return;
       }
 
-      const queryWithSize = selectedSize && !text.toLowerCase().includes('size') && !text.toLowerCase().includes(selectedSize.toLowerCase())
+      const queryWithSize = selectedSize &&
+        !text.toLowerCase().includes('size') &&
+        !text.toLowerCase().includes(selectedSize.toLowerCase())
         ? `${text} in size ${selectedSize}`
         : text;
 
@@ -816,7 +832,9 @@
 
     async function doSearch(text) {
       chipsContainer.innerHTML = '';
+      // Fix 4 — ensure input is always cleared
       input.value = '';
+      input.blur();
       sendBtn.disabled = true;
       showTyping();
 
