@@ -285,7 +285,7 @@ function refreshCartCount() {
     .then(cart => {
       const count = cart.item_count;
 
-      // Update cart count bubble only
+      // Update cart count bubble
       fetch('/?sections=header')
         .then(r => r.json())
         .then(sections => {
@@ -303,13 +303,20 @@ function refreshCartCount() {
 
       // Update count directly as backup
       document.querySelectorAll(
-        '#cart-icon-bubble span:not(.visually-hidden), .cart-count-bubble span:not(.visually-hidden)'
-      ).forEach(el => { el.textContent = count; });
+        '#cart-icon-bubble span:not(.visually-hidden), ' +
+        '.cart-count-bubble span:not(.visually-hidden), ' +
+        '[data-cart-count], .cart-count'
+      ).forEach(el => {
+        if (el.tagName === 'SPAN') el.textContent = count;
+        else el.setAttribute('data-cart-count', count);
+      });
 
-      // Open cart by clicking the cart icon — most reliable cross-theme approach
+      // Open cart using auto-detected trigger
       setTimeout(() => {
-       const cartIcon = document.getElementById('cart-icon-bubble');
-if (cartIcon) cartIcon.click();
+        if (!cartTriggerEl) cartTriggerEl = findCartTrigger();
+        if (cartTriggerEl) {
+          cartTriggerEl.click();
+        }
       }, 300);
 
     }).catch(() => {});
@@ -580,6 +587,39 @@ conversationHistory.push({ role: 'assistant', content: assistantContent });
 
     sendBtn.addEventListener('click',()=>sendMessage(input.value));
     input.addEventListener('keydown',e=>{if(e.key==='Enter')sendMessage(input.value);});
+
+    // Auto-detect cart trigger on page load
+let cartTriggerEl = null;
+
+function findCartTrigger() {
+  // Try in order of most common themes
+  const selectors = [
+    '#cart-icon-bubble',              // Dawn
+    '#CartToggle',                    // Debut
+    '.cart-toggle',                   // Impulse
+    '[data-cart-toggle]',             // Various
+    '[aria-controls="cart-drawer"]',  // Various
+    '[aria-controls="CartDrawer"]',   // Dawn variant
+    'a[href="/cart"]',                // Universal fallback
+    '.cart__icon',                    // Prestige
+    '#cart',                          // Simple themes
+    '.js-cart-count',                 // Various
+  ];
+
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      console.log('SellThru: cart trigger found:', sel);
+      return el;
+    }
+  }
+  return null;
+}
+
+// Find cart trigger after DOM is ready
+setTimeout(() => {
+  cartTriggerEl = findCartTrigger();
+}, 1000);
   }
 
   if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}
