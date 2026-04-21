@@ -11,30 +11,31 @@ async function chatWithGemini(messages, tools) {
         description: t.function.description,
         parameters: t.function.parameters
       }))
-    }]
+    }],
+    systemInstruction: {
+      parts: [{
+        text: messages.find(m => m.role === 'system')?.content || 'You are a helpful shopping assistant.'
+      }]
+    }
   });
 
-  // Convert OpenAI message format to Gemini format
-  const systemMsg = messages.find(m => m.role === 'system');
-  const chatHistory = messages
-    .filter(m => m.role !== 'system')
-    .slice(0, -1) // all except last
+  // Convert to Gemini format — skip system messages
+  const nonSystemMessages = messages.filter(m => m.role !== 'system');
+  const chatHistory = nonSystemMessages
+    .slice(0, -1)
     .map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content || '' }]
-    }));
+      parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }]
+    }))
+    .filter(m => m.parts[0].text);
 
-  const lastMessage = messages[messages.length - 1];
+  const lastMessage = nonSystemMessages[nonSystemMessages.length - 1];
 
-  const chat = model.startChat({
-    history: chatHistory,
-    systemInstruction: systemMsg?.content || ''
-  });
-
+  const chat = model.startChat({ history: chatHistory });
   const result = await chat.sendMessage(lastMessage.content);
   const response = result.response;
 
-  // Check if Gemini wants to call a function
+  // Check for function call
   const functionCall = response.candidates?.[0]?.content?.parts?.find(p => p.functionCall);
 
   if (functionCall) {
