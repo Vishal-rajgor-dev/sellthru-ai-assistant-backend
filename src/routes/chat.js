@@ -135,16 +135,45 @@ Be concise, warm and helpful.`
   ];
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: conversationMessages,
-      tools,
-      tool_choice: isProductQuery
-        ? { type: 'function', function: { name: 'search_products' } }
-        : 'auto'
-    });
+ let responseMessage;
+let usingFallback = false;
 
-    const responseMessage = completion.choices[0].message;
+try {
+  // Try OpenAI with 8 second timeout
+  const openAIPromise = openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: conversationMessages,
+    tools,
+    tool_choice: isProductQuery
+      ? { type: 'function', function: { name: 'search_products' } }
+      : 'auto'
+  });
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('OpenAI timeout')), 8000)
+  );
+
+  const completion = await Promise.race([openAIPromise, timeoutPromise]);
+  responseMessage = completion.choices[0].message;
+  console.log('Using OpenAI');
+
+} catch (openAIError) {
+  console.warn('OpenAI failed, switching to Gemini:', openAIError.message);
+  usingFallback = true;
+
+  try {
+    const { chatWithGemini } = require('../services/gemini');
+    responseMessage = await chatWithGemini(conversationMessages, tools);
+    console.log('Using Gemini fallback');
+  } catch (geminiError) {
+    console.error('Gemini also failed:', geminiError.message);
+    return res.status(503).json({
+      error: 'AI service temporarily unavailable. Please try again.',
+      products: [],
+      cursor: null
+    });
+  }
+}
 
     if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
       const toolCall = responseMessage.tool_calls[0];
