@@ -279,29 +279,53 @@
       if (t) t.remove();
     }
 
- function refreshCartCount() {
+function refreshCartCount() {
   fetch('/cart.js')
     .then(r => r.json())
     .then(cart => {
+      const count = cart.item_count;
 
-      // Update cart count bubble only — don't touch cart drawer DOM
-      fetch('/?sections=header')
+      // Re-render cart drawer with updated items
+      fetch('/?sections=cart-drawer')
         .then(r => r.json())
         .then(sections => {
-          if (sections.header) {
+          if (sections['cart-drawer']) {
             const parser = new DOMParser();
-            const doc = parser.parseFromString(sections.header, 'text/html');
+            const doc = parser.parseFromString(sections['cart-drawer'], 'text/html');
+            
+            // Update the inner cart drawer content
+            const newInner = doc.querySelector('.cart-drawer');
+            const oldInner = document.querySelector('.cart-drawer');
+            if (newInner && oldInner) {
+              oldInner.innerHTML = newInner.innerHTML;
+            }
+
+            // Update cart count bubble
             const newBubble = doc.querySelector('#cart-icon-bubble');
             const oldBubble = document.querySelector('#cart-icon-bubble');
             if (newBubble && oldBubble) {
               oldBubble.innerHTML = newBubble.innerHTML;
               oldBubble.classList.remove('hidden');
             }
+
+            // Open the cart drawer using Dawn's native method
+            const cartDrawer = document.querySelector('cart-drawer');
+            if (cartDrawer) {
+              // Dawn uses this to open
+              cartDrawer.classList.add('animate', 'active');
+              const overlay = document.querySelector('#CartDrawer-Overlay');
+              if (overlay) overlay.addEventListener('click', () => {
+                cartDrawer.classList.remove('active');
+              }, { once: true });
+              
+              // Focus trap for accessibility
+              const firstFocusable = cartDrawer.querySelector('a, button, input');
+              if (firstFocusable) firstFocusable.focus();
+            }
           }
         }).catch(() => {});
 
-      // Update count spans directly as backup
-      const count = cart.item_count;
+      // Direct count update as backup
       document.querySelectorAll(
         '#cart-icon-bubble span:not(.visually-hidden), .cart-count-bubble span:not(.visually-hidden)'
       ).forEach(el => { el.textContent = count; });
