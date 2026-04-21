@@ -308,10 +308,8 @@ function refreshCartCount() {
 
       // Open cart by clicking the cart icon — most reliable cross-theme approach
       setTimeout(() => {
-        const cartIcon = document.querySelector(
-          'a[href="/cart"], #cart-icon-bubble, .cart-link, [data-cart-toggle], header-drawer a[href="/cart"]'
-        );
-        if (cartIcon) cartIcon.click();
+       const cartIcon = document.getElementById('cart-icon-bubble');
+if (cartIcon) cartIcon.click();
       }, 300);
 
     }).catch(() => {});
