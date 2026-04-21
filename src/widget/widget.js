@@ -285,102 +285,34 @@ function refreshCartCount() {
     .then(cart => {
       const count = cart.item_count;
 
-      fetch('/?sections=cart-drawer')
+      // Update cart count bubble only
+      fetch('/?sections=header')
         .then(r => r.json())
         .then(sections => {
-          if (sections['cart-drawer']) {
+          if (sections.header) {
             const parser = new DOMParser();
-            const doc = parser.parseFromString(sections['cart-drawer'], 'text/html');
-
-            // Update cart drawer content — try multiple theme structures
-            const selectors = [
-              '.cart-drawer',           // Dawn
-              '#cart-drawer',           // Debut
-              '.cart__drawer',          // Impulse
-              '[data-cart-drawer]',     // Various
-              '#CartDrawer',            // Dawn inner
-              '.js-drawer-open-cart',   // Various
-            ];
-
-            for (const sel of selectors) {
-              const newEl = doc.querySelector(sel);
-              const oldEl = document.querySelector(sel);
-              if (newEl && oldEl) {
-                oldEl.innerHTML = newEl.innerHTML;
-                break;
-              }
-            }
-
-            // Update cart count bubble — try multiple selectors
-            const bubbleSelectors = [
-              '#cart-icon-bubble',
-              '.cart-count-bubble',
-              '[data-cart-count]',
-              '.cart__count',
-              '.cart-count'
-            ];
-
-            for (const sel of bubbleSelectors) {
-              const newEl = doc.querySelector(sel);
-              const oldEl = document.querySelector(sel);
-              if (newEl && oldEl) {
-                oldEl.innerHTML = newEl.innerHTML;
-                oldEl.classList.remove('hidden');
-                break;
-              }
+            const doc = parser.parseFromString(sections.header, 'text/html');
+            const newBubble = doc.querySelector('#cart-icon-bubble');
+            const oldBubble = document.querySelector('#cart-icon-bubble');
+            if (newBubble && oldBubble) {
+              oldBubble.innerHTML = newBubble.innerHTML;
+              oldBubble.classList.remove('hidden');
             }
           }
         }).catch(() => {});
 
-      // Open cart drawer — try multiple theme approaches
-      function openCartDrawer() {
-        // Approach 1 — Dawn / custom element with open method
-        const cartDrawerEl = document.querySelector('cart-drawer');
-        if (cartDrawerEl && typeof cartDrawerEl.open === 'function') {
-          cartDrawerEl.open();
-          return;
-        }
-
-        // Approach 2 — Dawn fallback via class
-        if (cartDrawerEl) {
-          cartDrawerEl.classList.add('animate', 'active');
-          return;
-        }
-
-        // Approach 3 — Debut theme
-        const debutDrawer = document.querySelector('#CartDrawer');
-        if (debutDrawer) {
-          debutDrawer.classList.add('is-open');
-          return;
-        }
-
-        // Approach 4 — Impulse / other themes with drawer trigger
-        const drawerTrigger = document.querySelector(
-          '[data-drawer="cart"], [data-cart-toggle], .js-drawer-open-cart, [aria-controls="cart-drawer"]'
-        );
-        if (drawerTrigger) {
-          drawerTrigger.click();
-          return;
-        }
-
-        // Approach 5 — Generic: dispatch custom events
-        document.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
-        document.dispatchEvent(new CustomEvent('theme:cart:open', { bubbles: true }));
-        window.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
-      }
-
-      // Small delay to let DOM update first
-      setTimeout(openCartDrawer, 150);
-
-      // Direct count update as final backup
+      // Update count directly as backup
       document.querySelectorAll(
-        '#cart-icon-bubble span:not(.visually-hidden), ' +
-        '.cart-count-bubble span:not(.visually-hidden), ' +
-        '[data-cart-count]'
-      ).forEach(el => {
-        if (el.tagName === 'SPAN') el.textContent = count;
-        else el.setAttribute('data-cart-count', count);
-      });
+        '#cart-icon-bubble span:not(.visually-hidden), .cart-count-bubble span:not(.visually-hidden)'
+      ).forEach(el => { el.textContent = count; });
+
+      // Open cart by clicking the cart icon — most reliable cross-theme approach
+      setTimeout(() => {
+        const cartIcon = document.querySelector(
+          'a[href="/cart"], #cart-icon-bubble, .cart-link, [data-cart-toggle], header-drawer a[href="/cart"]'
+        );
+        if (cartIcon) cartIcon.click();
+      }, 300);
 
     }).catch(() => {});
 }
