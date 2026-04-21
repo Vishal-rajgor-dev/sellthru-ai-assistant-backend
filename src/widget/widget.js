@@ -285,50 +285,102 @@ function refreshCartCount() {
     .then(cart => {
       const count = cart.item_count;
 
-      // Re-render cart drawer with updated items
       fetch('/?sections=cart-drawer')
         .then(r => r.json())
         .then(sections => {
           if (sections['cart-drawer']) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(sections['cart-drawer'], 'text/html');
-            
-            // Update the inner cart drawer content
-            const newInner = doc.querySelector('.cart-drawer');
-            const oldInner = document.querySelector('.cart-drawer');
-            if (newInner && oldInner) {
-              oldInner.innerHTML = newInner.innerHTML;
+
+            // Update cart drawer content — try multiple theme structures
+            const selectors = [
+              '.cart-drawer',           // Dawn
+              '#cart-drawer',           // Debut
+              '.cart__drawer',          // Impulse
+              '[data-cart-drawer]',     // Various
+              '#CartDrawer',            // Dawn inner
+              '.js-drawer-open-cart',   // Various
+            ];
+
+            for (const sel of selectors) {
+              const newEl = doc.querySelector(sel);
+              const oldEl = document.querySelector(sel);
+              if (newEl && oldEl) {
+                oldEl.innerHTML = newEl.innerHTML;
+                break;
+              }
             }
 
-            // Update cart count bubble
-            const newBubble = doc.querySelector('#cart-icon-bubble');
-            const oldBubble = document.querySelector('#cart-icon-bubble');
-            if (newBubble && oldBubble) {
-              oldBubble.innerHTML = newBubble.innerHTML;
-              oldBubble.classList.remove('hidden');
-            }
+            // Update cart count bubble — try multiple selectors
+            const bubbleSelectors = [
+              '#cart-icon-bubble',
+              '.cart-count-bubble',
+              '[data-cart-count]',
+              '.cart__count',
+              '.cart-count'
+            ];
 
-            // Open the cart drawer using Dawn's native method
-            const cartDrawer = document.querySelector('cart-drawer');
-            if (cartDrawer) {
-              // Dawn uses this to open
-              cartDrawer.classList.add('animate', 'active');
-              const overlay = document.querySelector('#CartDrawer-Overlay');
-              if (overlay) overlay.addEventListener('click', () => {
-                cartDrawer.classList.remove('active');
-              }, { once: true });
-              
-              // Focus trap for accessibility
-              const firstFocusable = cartDrawer.querySelector('a, button, input');
-              if (firstFocusable) firstFocusable.focus();
+            for (const sel of bubbleSelectors) {
+              const newEl = doc.querySelector(sel);
+              const oldEl = document.querySelector(sel);
+              if (newEl && oldEl) {
+                oldEl.innerHTML = newEl.innerHTML;
+                oldEl.classList.remove('hidden');
+                break;
+              }
             }
           }
         }).catch(() => {});
 
-      // Direct count update as backup
+      // Open cart drawer — try multiple theme approaches
+      function openCartDrawer() {
+        // Approach 1 — Dawn / custom element with open method
+        const cartDrawerEl = document.querySelector('cart-drawer');
+        if (cartDrawerEl && typeof cartDrawerEl.open === 'function') {
+          cartDrawerEl.open();
+          return;
+        }
+
+        // Approach 2 — Dawn fallback via class
+        if (cartDrawerEl) {
+          cartDrawerEl.classList.add('animate', 'active');
+          return;
+        }
+
+        // Approach 3 — Debut theme
+        const debutDrawer = document.querySelector('#CartDrawer');
+        if (debutDrawer) {
+          debutDrawer.classList.add('is-open');
+          return;
+        }
+
+        // Approach 4 — Impulse / other themes with drawer trigger
+        const drawerTrigger = document.querySelector(
+          '[data-drawer="cart"], [data-cart-toggle], .js-drawer-open-cart, [aria-controls="cart-drawer"]'
+        );
+        if (drawerTrigger) {
+          drawerTrigger.click();
+          return;
+        }
+
+        // Approach 5 — Generic: dispatch custom events
+        document.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
+        document.dispatchEvent(new CustomEvent('theme:cart:open', { bubbles: true }));
+        window.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
+      }
+
+      // Small delay to let DOM update first
+      setTimeout(openCartDrawer, 150);
+
+      // Direct count update as final backup
       document.querySelectorAll(
-        '#cart-icon-bubble span:not(.visually-hidden), .cart-count-bubble span:not(.visually-hidden)'
-      ).forEach(el => { el.textContent = count; });
+        '#cart-icon-bubble span:not(.visually-hidden), ' +
+        '.cart-count-bubble span:not(.visually-hidden), ' +
+        '[data-cart-count]'
+      ).forEach(el => {
+        if (el.tagName === 'SPAN') el.textContent = count;
+        else el.setAttribute('data-cart-count', count);
+      });
 
     }).catch(() => {});
 }
