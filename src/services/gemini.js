@@ -4,7 +4,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function chatWithGemini(messages, tools) {
   const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: 'gemini-2.0-flash',
     tools: [{
       functionDeclarations: tools.map(t => ({
         name: t.function.name,
