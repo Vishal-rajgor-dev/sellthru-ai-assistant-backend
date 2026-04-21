@@ -285,7 +285,7 @@ function refreshCartCount() {
     .then(cart => {
       const count = cart.item_count;
 
-      // Update cart count bubble
+      // Method 1 — Update header count bubble via sections API
       fetch('/?sections=header')
         .then(r => r.json())
         .then(sections => {
@@ -301,23 +301,64 @@ function refreshCartCount() {
           }
         }).catch(() => {});
 
-      // Update count directly as backup
+      // Method 2 — Update count spans directly
       document.querySelectorAll(
-        '#cart-icon-bubble span:not(.visually-hidden), ' +
-        '.cart-count-bubble span:not(.visually-hidden), ' +
-        '[data-cart-count], .cart-count'
+        '#cart-icon-bubble span:not(.visually-hidden),' +
+        '.cart-count-bubble span:not(.visually-hidden),' +
+        '[data-cart-count],.cart-count,.cart__count'
       ).forEach(el => {
         if (el.tagName === 'SPAN') el.textContent = count;
         else el.setAttribute('data-cart-count', count);
       });
 
-      // Open cart using auto-detected trigger
-      setTimeout(() => {
-        if (!cartTriggerEl) cartTriggerEl = findCartTrigger();
-        if (cartTriggerEl) {
-          cartTriggerEl.click();
-        }
-      }, 300);
+      // Method 3 — Use Shopify's section rendering to update cart drawer
+      fetch('/?sections=cart-drawer')
+        .then(r => r.json())
+        .then(sections => {
+          if (!sections['cart-drawer']) return;
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(sections['cart-drawer'], 'text/html');
+
+          // Find cart drawer form/items — more surgical than replacing whole drawer
+          const targets = [
+            '#CartDrawer-Form',
+            '.cart-drawer__form',
+            '#cart-drawer-form',
+            '[data-cart-form]'
+          ];
+
+          for (const sel of targets) {
+            const newEl = doc.querySelector(sel);
+            const oldEl = document.querySelector(sel);
+            if (newEl && oldEl) {
+              oldEl.innerHTML = newEl.innerHTML;
+              break;
+            }
+          }
+
+          // Now open using theme's own trigger
+          setTimeout(() => {
+            // Find and click the cart icon — most universal approach
+            const triggers = [
+              '#cart-icon-bubble',
+              '[data-cart-toggle]',
+              '[aria-controls="CartDrawer"]',
+              '[aria-controls="cart-drawer"]',
+              '.cart-toggle',
+              '#CartToggle',
+              'a[href="/cart"]:not(.cart__checkout-button)'
+            ];
+
+            for (const sel of triggers) {
+              const el = document.querySelector(sel);
+              if (el) {
+                el.click();
+                break;
+              }
+            }
+          }, 100);
+
+        }).catch(() => {});
 
     }).catch(() => {});
 }
