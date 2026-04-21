@@ -18,7 +18,7 @@ const tools = [
         properties: {
           query: {
             type: 'string',
-            description: 'The search query e.g. "red dress under $50" or "bridesmaid dresses"'
+            description: 'The search query e.g. "black dress under $50" or "bridesmaid dresses"'
           }
         },
         required: ['query']
@@ -115,18 +115,18 @@ Your job:
 - "under $X" → include price in query
 - "bridesmaid" → search "bridesmaid dresses"
 - "party" → search "party dresses"
-- Follow-ups like "show me those in red" → combine with previous context
+- Follow-ups like "show me those in red" or "black ones" → combine with previous search context
 - Greetings only → respond warmly without searching
 
 Response style:
-- Keep it to 1-2 sentences
-- Add a styling tip when relevant
+- Keep it to 1-2 sentences max
+- Add a brief styling tip when relevant
 - Never say you cannot help — always try to search
 
 Be concise, warm and helpful.`
   };
 
-  const isProductQuery = /show|find|search|dress|cloth|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift|party|bride|wedding|sequin|maxi|midi|mini|colour|color|sleeve|formal|casual/i.test(message);
+  const isProductQuery = /show|find|search|dress|cloth|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift|party|bride|wedding|sequin|maxi|midi|mini|colour|color|sleeve|formal|casual|black|white|red|blue|pink|size/i.test(message);
 
   const conversationMessages = [
     systemPrompt,
@@ -134,46 +134,46 @@ Be concise, warm and helpful.`
     { role: 'user', content: message }
   ];
 
-  try {
- let responseMessage;
-let usingFallback = false;
-
-try {
-  // Try OpenAI with 8 second timeout
-  const openAIPromise = openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: conversationMessages,
-    tools,
-    tool_choice: isProductQuery
-      ? { type: 'function', function: { name: 'search_products' } }
-      : 'auto'
-  });
-
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('OpenAI timeout')), 8000)
-  );
-
-  const completion = await Promise.race([openAIPromise, timeoutPromise]);
-  responseMessage = completion.choices[0].message;
-  console.log('Using OpenAI');
-
-} catch (openAIError) {
-  console.warn('OpenAI failed, switching to Gemini:', openAIError.message);
-  usingFallback = true;
+  // Extract color filter from message
+  const colorMatch = message.match(/\b(black|white|red|blue|green|pink|purple|gold|silver|nude|beige|brown|navy|burgundy|cream|ivory|emerald|teal|coral|yellow|orange)\b/i);
+  const colorFilter = colorMatch ? colorMatch[1].toLowerCase() : null;
 
   try {
-    const { chatWithGemini } = require('../services/gemini');
-    responseMessage = await chatWithGemini(conversationMessages, tools);
-    console.log('Using Gemini fallback');
-  } catch (geminiError) {
-    console.error('Gemini also failed:', geminiError.message);
-    return res.status(503).json({
-      error: 'AI service temporarily unavailable. Please try again.',
-      products: [],
-      cursor: null
-    });
-  }
-}
+    let responseMessage;
+
+    try {
+      const openAIPromise = openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: conversationMessages,
+        tools,
+        tool_choice: isProductQuery
+          ? { type: 'function', function: { name: 'search_products' } }
+          : 'auto'
+      });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('OpenAI timeout')), 8000)
+      );
+
+      const completion = await Promise.race([openAIPromise, timeoutPromise]);
+      responseMessage = completion.choices[0].message;
+      console.log('Using OpenAI');
+
+    } catch (openAIError) {
+      console.warn('OpenAI failed, switching to Gemini:', openAIError.message);
+      try {
+        const { chatWithGemini } = require('../services/gemini');
+        responseMessage = await chatWithGemini(conversationMessages, tools);
+        console.log('Using Gemini fallback');
+      } catch (geminiError) {
+        console.error('Gemini also failed:', geminiError.message);
+        return res.status(503).json({
+          error: 'AI service temporarily unavailable. Please try again.',
+          products: [],
+          cursor: null
+        });
+      }
+    }
 
     if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
       const toolCall = responseMessage.tool_calls[0];
@@ -182,7 +182,8 @@ try {
       const result = await searchProducts(session.access_token, shop, args.query, {
         cursor: cursor || null,
         maxPrice: maxPrice || null,
-        minPrice: minPrice || null
+        minPrice: minPrice || null,
+        colorFilter
       });
 
       if (result === null) {

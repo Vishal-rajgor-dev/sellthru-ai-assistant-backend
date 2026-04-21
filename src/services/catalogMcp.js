@@ -28,11 +28,16 @@ async function searchProducts(accessToken, shop, query, options = {}) {
       ? parseInt(priceMatch[1] || priceMatch[2] || priceMatch[3]) * 100
       : null;
 
-    const cleanQuery = query
+    let cleanQuery = query
       .replace(/under\s*\$?\d+/i, '')
       .replace(/below\s*\$?\d+/i, '')
       .replace(/less\s*than\s*\$?\d+/i, '')
       .trim();
+
+    // Add color to query for better MCP filtering
+    if (options.colorFilter && !cleanQuery.toLowerCase().includes(options.colorFilter)) {
+      cleanQuery = `${options.colorFilter} ${cleanQuery}`;
+    }
 
     const catalogArgs = {
       query: cleanQuery || query,
@@ -51,7 +56,7 @@ async function searchProducts(accessToken, shop, query, options = {}) {
       catalogArgs.filters.price.min = options.minPrice;
     }
 
-    console.log('MCP search:', cleanQuery || query, '| maxPrice:', maxPrice);
+    console.log('MCP search:', cleanQuery || query, '| maxPrice:', maxPrice, '| color:', options.colorFilter);
 
     const result = await client.callTool({
       name: 'search_catalog',
@@ -82,53 +87,28 @@ async function getStoreContext(accessToken, shop) {
   try {
     await client.connect(transport);
 
-    // Try multiple queries to get a good sample of products
-    const queries = ['dress', 'top', 'collection', 'style', 'wear'];
-    let allProducts = [];
-
-    for (const q of queries) {
-      try {
-        const result = await client.callTool({
-          name: 'search_catalog',
-          arguments: {
-            catalog: {
-              query: q,
-              pagination: { limit: 10 }
-            }
-          }
-        });
-        const content = result.content?.[0]?.text;
-        if (content) {
-          const parsed = JSON.parse(content);
-          const products = parsed.catalog?.items || parsed.items || [];
-          allProducts = [...allProducts, ...products];
-          if (allProducts.length >= 15) break;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
+    const result = await client.callTool({
+      name: 'search_catalog',
+      arguments: { catalog: { query: 'dress', pagination: { limit: 20 } } }
+    });
 
     await client.close();
 
-    if (!allProducts.length) return null;
+    const content = result.content?.[0]?.text;
+    if (!content) return null;
 
-    // Deduplicate by id
-    const seen = new Set();
-    const unique = allProducts.filter(p => {
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
+    const parsed = JSON.parse(content);
+    const products = parsed.catalog?.items || parsed.items || [];
 
-    const types = [...new Set(unique.map(p => p.product_type || p.productType).filter(Boolean))];
-    const titles = unique.slice(0, 10).map(p => p.title).filter(Boolean);
-    const tags = [...new Set(unique.flatMap(p => p.tags || []).filter(Boolean))].slice(0, 20);
-    const prices = unique.map(p => p.price_range?.min?.amount).filter(Boolean).map(p => Math.round(p / 100));
+    if (!products.length) return null;
+
+    const types = [...new Set(products.map(p => p.product_type || p.productType).filter(Boolean))];
+    const titles = products.slice(0, 8).map(p => p.title).filter(Boolean);
+    const tags = [...new Set(products.flatMap(p => p.tags || []).filter(Boolean))].slice(0, 20);
+    const prices = products.map(p => p.price_range?.min?.amount).filter(Boolean).map(p => Math.round(p / 100));
     const minPrice = prices.length ? Math.min(...prices) : null;
     const maxPrice = prices.length ? Math.max(...prices) : null;
 
-    console.log('Store context found:', { typesCount: types.length, titlesCount: titles.length, tagsCount: tags.length });
     return { types, titles, tags, minPrice, maxPrice };
 
   } catch (err) {
