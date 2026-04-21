@@ -14,12 +14,11 @@ async function chatWithGemini(messages, tools) {
     }],
     systemInstruction: {
       parts: [{
-        text: messages.find(m => m.role === 'system')?.content || 'You are a helpful shopping assistant.'
+        text: 'You are a helpful fashion shopping assistant. Always use search_products tool when customers ask about products, styles or clothing. Be friendly and brief.'
       }]
     }
   });
 
-  // Convert to Gemini format — skip system messages
   const nonSystemMessages = messages.filter(m => m.role !== 'system');
   const chatHistory = nonSystemMessages
     .slice(0, -1)
@@ -35,7 +34,6 @@ async function chatWithGemini(messages, tools) {
   const result = await chat.sendMessage(lastMessage.content);
   const response = result.response;
 
-  // Check for function call
   const functionCall = response.candidates?.[0]?.content?.parts?.find(p => p.functionCall);
 
   if (functionCall) {
