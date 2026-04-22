@@ -1,875 +1,1227 @@
+/**
+ * SellThru AI Shopping Assistant — Widget v2.0
+ * Features: localStorage persistence, 8-product pagination, Make It Yours filters
+ *           extracted from actual results, product drawer, universal store support
+ */
 (function () {
-  const SHOP = window.sellthruShop || window.sellthruConfig?.shop || '';
-  const API_URL = window.sellthruApiUrl || window.sellthruConfig?.apiUrl || '';
+  'use strict';
 
-  async function init() {
+  // ─────────────────────────────────────────────
+  // CONSTANTS
+  // ─────────────────────────────────────────────
+  const PAGE_SIZE = 8;
+  const SESSION_TTL = 24 * 60 * 60 * 1000; // 24h
+  const MAX_STORED_MESSAGES = 20;
+  const MAX_STORED_HISTORY = 40;
+  const SHOP = (window.Shopify && window.Shopify.shop) || window.location.hostname;
+  const STORAGE_KEY = 'slt_session_' + SHOP.replace(/\W/g, '_');
+
+  // API_URL injected by liquid: <script>window.sltApiUrl = "{{ block.settings.api_url }}";</script>
+  function getApiUrl() {
+    return window.sltApiUrl || '';
+  }
+
+  // ─────────────────────────────────────────────
+  // STATE
+  // ─────────────────────────────────────────────
+  const state = {
+    isOpen: false,
+    isLoading: false,
+    sessionId: uid(),
+    messages: [],      // { id, role, text, allProducts, query, timestamp }
+    history: [],       // OpenAI format: [{role, content}]
+    selectedSizes: [],
+    pageExpanded: {},  // msgId → boolean
+    refineTerms: new Set(),
+  };
+
+  // ─────────────────────────────────────────────
+  // UTILITIES
+  // ─────────────────────────────────────────────
+  function uid() {
+    return 'slt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+  }
+
+  function esc(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function formatPrice(price) {
+    if (price == null || price === '') return '';
+    const raw = parseFloat(price);
+    if (isNaN(raw)) return String(price);
+    // Shopify Storefront API → decimal string e.g. "49.99"
+    // Cart/AJAX API → integer cents e.g. 4999
+    const amount = raw > 1000 ? raw / 100 : raw;
+    const currency = (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || 'USD';
     try {
-      const r = await fetch(`${API_URL}/api/widget/config?shop=${encodeURIComponent(SHOP)}`);
-      const config = await r.json();
-      if (!config.enabled) return;
-      mount(config);
-    } catch (e) {
-      mount({ enabled: true, color: '#000000', greeting: 'Hi! How can I help you find something today?', promptChips: ["What's new?", 'Best sellers', 'Under $100', 'Gifts'] });
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency', currency,
+        minimumFractionDigits: 2,
+      }).format(amount);
+    } catch (_) {
+      return currency + ' ' + amount.toFixed(2);
     }
   }
 
-  function mount(config) {
-    if (document.getElementById('slt-launcher')) return;
-    const COLOR = config.color || '#000';
-    const GREETING = config.greeting || 'Hi! How can I help you find something today?';
-    const CHIPS = config.promptChips || ["What's new?", 'Best sellers', 'Under $100', 'Gifts'];
+  // ─────────────────────────────────────────────
+  // LOCALSTORAGE PERSISTENCE
+  // ─────────────────────────────────────────────
+  function saveSession() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        v: 2,
+        sessionId: state.sessionId,
+        messages: state.messages.slice(-MAX_STORED_MESSAGES),
+        history: state.history.slice(-MAX_STORED_HISTORY),
+        selectedSizes: state.selectedSizes,
+        timestamp: Date.now(),
+      }));
+    } catch (e) {
+      // quota exceeded or private browsing — non-fatal
+    }
+  }
 
-    const style = document.createElement('style');
-    style.id = 'slt-styles';
-    style.textContent = `
-      #slt-launcher{position:fixed!important;bottom:24px!important;right:24px!important;width:56px!important;height:56px!important;border-radius:50%!important;background:${COLOR}!important;border:none!important;cursor:pointer!important;display:flex!important;align-items:center!important;justify-content:center!important;z-index:2147483647!important;box-shadow:0 4px 16px rgba(0,0,0,0.18)!important;transition:transform 0.2s!important;padding:0!important}
-      #slt-launcher:hover{transform:scale(1.08)!important}
-      #slt-launcher svg{width:26px!important;height:26px!important;fill:white!important;pointer-events:none!important}
-      #slt-window{position:fixed!important;bottom:92px!important;right:24px!important;width:420px!important;height:620px!important;background:#fff!important;border-radius:20px!important;border:1px solid #e0e0e0!important;display:flex!important;flex-direction:column!important;overflow:hidden!important;z-index:2147483646!important;box-shadow:0 8px 40px rgba(0,0,0,0.14)!important;transition:opacity 0.25s,transform 0.25s!important;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif!important}
-      #slt-window.slt-hidden{opacity:0!important;pointer-events:none!important;transform:translateY(14px)!important}
-      #slt-window.slt-expanded{width:90vw!important;height:90vh!important;bottom:5vh!important;right:5vw!important;border-radius:16px!important}
-      #slt-header{background:${COLOR}!important;color:#fff!important;padding:12px 16px!important;display:flex!important;align-items:center!important;justify-content:space-between!important;flex-shrink:0!important;gap:8px!important}
-      #slt-header-left{display:flex!important;align-items:center!important;gap:8px!important;flex:1!important;min-width:0!important}
-      #slt-header-dot{width:8px!important;height:8px!important;background:#4ade80!important;border-radius:50%!important;animation:slt-pulse 2s infinite!important;flex-shrink:0!important}
-      #slt-header-title{font-size:14px!important;font-weight:600!important;white-space:nowrap!important}
-      #slt-size-btn{background:rgba(255,255,255,0.15)!important;border:1px solid rgba(255,255,255,0.3)!important;color:#fff!important;border-radius:20px!important;padding:4px 10px!important;font-size:11px!important;cursor:pointer!important;white-space:nowrap!important;transition:background 0.15s!important}
-      #slt-size-btn:hover{background:rgba(255,255,255,0.25)!important}
-      #slt-header-actions{display:flex!important;align-items:center!important;gap:6px!important;flex-shrink:0!important}
-      .slt-icon-btn{background:none!important;border:none!important;color:rgba(255,255,255,0.8)!important;cursor:pointer!important;font-size:16px!important;padding:4px!important;line-height:1!important;transition:color 0.15s!important}
-      .slt-icon-btn:hover{color:#fff!important}
-      @keyframes slt-pulse{0%,100%{opacity:1}50%{opacity:0.5}}
-      #slt-messages{flex:1!important;overflow-y:auto!important;padding:14px!important;display:flex!important;flex-direction:column!important;gap:12px!important}
-      #slt-messages::-webkit-scrollbar{width:4px!important}
-      #slt-messages::-webkit-scrollbar-thumb{background:#e0e0e0!important;border-radius:4px!important}
-      .slt-msg{max-width:85%!important;padding:10px 14px!important;border-radius:14px!important;font-size:14px!important;line-height:1.5!important;word-break:break-word!important}
-      .slt-bot{background:#f5f5f5!important;color:#111!important;align-self:flex-start!important;border-bottom-left-radius:4px!important}
-      .slt-user{background:${COLOR}!important;color:#fff!important;align-self:flex-end!important;border-bottom-right-radius:4px!important}
-      .slt-typing{display:flex!important;gap:4px!important;align-items:center!important;padding:12px 16px!important;background:#f5f5f5!important;border-radius:14px!important;border-bottom-left-radius:4px!important;align-self:flex-start!important}
-      .slt-typing span{width:7px!important;height:7px!important;background:#bbb!important;border-radius:50%!important;display:inline-block!important;animation:slt-bounce 1.2s infinite!important}
-      .slt-typing span:nth-child(2){animation-delay:0.2s!important}
-      .slt-typing span:nth-child(3){animation-delay:0.4s!important}
-      @keyframes slt-bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
-      .slt-products{width:100%!important}
-      .slt-filter-bar{display:flex!important;gap:6px!important;flex-wrap:wrap!important;padding-bottom:8px!important}
-      .slt-filter-btn{background:#fff!important;border:1px solid #ddd!important;border-radius:20px!important;padding:5px 12px!important;font-size:11px!important;font-weight:500!important;cursor:pointer!important;color:#333!important;transition:all 0.15s!important;white-space:nowrap!important}
-      .slt-filter-btn:hover,.slt-filter-btn.active{background:${COLOR}!important;color:#fff!important;border-color:${COLOR}!important}
-      .slt-slider-wrap{position:relative!important;width:100%!important}
-      .slt-slider{display:flex!important;gap:10px!important;overflow-x:auto!important;scroll-snap-type:x mandatory!important;scrollbar-width:none!important;padding-bottom:4px!important;cursor:grab!important}
-      .slt-slider::-webkit-scrollbar{display:none!important}
-      .slt-slider:active{cursor:grabbing!important}
-      .slt-slider-btn{position:absolute!important;top:38%!important;transform:translateY(-50%)!important;width:30px!important;height:30px!important;border-radius:50%!important;background:#fff!important;border:1px solid #ddd!important;cursor:pointer!important;display:flex!important;align-items:center!important;justify-content:center!important;z-index:10!important;font-size:16px!important;box-shadow:0 2px 8px rgba(0,0,0,0.1)!important;transition:all 0.15s!important;line-height:1!important}
-      .slt-slider-btn:hover{background:${COLOR}!important;color:#fff!important;border-color:${COLOR}!important}
-      .slt-slider-prev{left:-13px!important}
-      .slt-slider-next{right:-13px!important}
-      .slt-card{background:#fff!important;border:1px solid #ebebeb!important;border-radius:12px!important;overflow:hidden!important;transition:border-color 0.15s,transform 0.15s,box-shadow 0.15s!important;display:flex!important;flex-direction:column!important;flex-shrink:0!important;width:165px!important;scroll-snap-align:start!important;cursor:pointer!important}
-      .slt-card:hover{border-color:#ccc!important;transform:translateY(-2px)!important;box-shadow:0 4px 12px rgba(0,0,0,0.08)!important}
-      .slt-card-img-wrap{position:relative!important;width:100%!important;aspect-ratio:0.75!important;overflow:hidden!important;background:#f8f8f8!important}
-      .slt-card-img-wrap img{width:100%!important;height:100%!important;object-fit:cover!important;transition:transform 0.3s!important}
-      .slt-card:hover .slt-card-img-wrap img{transform:scale(1.04)!important}
-      .slt-img-dots{position:absolute!important;bottom:7px!important;left:50%!important;transform:translateX(-50%)!important;display:flex!important;gap:4px!important}
-      .slt-img-dot{width:5px!important;height:5px!important;border-radius:50%!important;background:rgba(255,255,255,0.5)!important;transition:background 0.2s!important}
-      .slt-img-dot.active{background:#fff!important}
-      .slt-card-actions-top{position:absolute!important;top:8px!important;right:8px!important;display:flex!important;gap:4px!important;opacity:0!important;transition:opacity 0.15s!important}
-      .slt-card:hover .slt-card-actions-top{opacity:1!important}
-      .slt-card-icon-btn{width:28px!important;height:28px!important;border-radius:50%!important;background:rgba(255,255,255,0.92)!important;border:none!important;cursor:pointer!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:12px!important;transition:background 0.15s!important}
-      .slt-card-icon-btn:hover{background:#fff!important}
-      .slt-card-badge{position:absolute!important;top:7px!important;left:7px!important;font-size:9px!important;font-weight:700!important;padding:3px 7px!important;border-radius:4px!important;text-transform:uppercase!important;letter-spacing:0.5px!important}
-      .slt-badge-out{background:#e44!important;color:#fff!important}
-      .slt-badge-sale{background:#e44!important;color:#fff!important}
-      .slt-card-body{padding:9px 10px 11px!important;flex:1!important;display:flex!important;flex-direction:column!important}
-      .slt-card-title{font-size:11px!important;font-weight:600!important;color:#111!important;margin-bottom:4px!important;line-height:1.4!important;display:-webkit-box!important;-webkit-line-clamp:2!important;-webkit-box-orient:vertical!important;overflow:hidden!important}
-      .slt-card-prices{display:flex!important;align-items:center!important;gap:5px!important;margin-bottom:6px!important;flex-wrap:wrap!important}
-      .slt-price{font-size:13px!important;font-weight:700!important;color:#111!important}
-      .slt-compare{font-size:11px!important;color:#aaa!important;text-decoration:line-through!important}
-      .slt-variants{display:flex!important;flex-wrap:wrap!important;gap:3px!important;margin-bottom:7px!important}
-      .slt-variant-pill{border:1.5px solid #e0e0e0!important;border-radius:4px!important;padding:2px 6px!important;font-size:9px!important;font-weight:500!important;cursor:pointer!important;color:#555!important;transition:all 0.15s!important;background:#fff!important;white-space:nowrap!important}
-      .slt-variant-pill.selected{border-color:${COLOR}!important;color:${COLOR}!important;background:#f5f5f5!important}
-      .slt-variant-more{font-size:9px!important;color:#999!important;padding:2px 0!important;align-self:center!important}
-      .slt-card-actions{display:flex!important;gap:5px!important;margin-top:auto!important}
-      .slt-add{flex:1!important;background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:6px!important;padding:8px 4px!important;font-size:10px!important;font-weight:600!important;cursor:pointer!important;transition:background 0.15s!important}
-      .slt-add:disabled{background:#ccc!important;cursor:default!important}
-      .slt-add.slt-added{background:#1a7a4a!important}
-      .slt-size-picker{display:flex!important;flex-wrap:wrap!important;gap:6px!important;padding:4px 0!important}
-      .slt-refine-panel{background:#fffbf0!important;border:1px solid #f0e6c0!important;border-radius:12px!important;padding:12px 14px!important;width:100%!important}
-      .slt-refine-title{font-size:12px!important;font-weight:600!important;color:#333!important;margin-bottom:4px!important}
-      .slt-refine-sub{font-size:11px!important;color:#666!important;margin-bottom:10px!important}
-      .slt-refine-chips{display:flex!important;flex-wrap:wrap!important;gap:6px!important;margin-bottom:10px!important}
-      .slt-refine-chip{background:#fff!important;border:1px solid #ddd!important;border-radius:20px!important;padding:6px 12px!important;font-size:11px!important;font-weight:500!important;cursor:pointer!important;color:#333!important;transition:all 0.15s!important}
-      .slt-refine-chip:hover{background:${COLOR}!important;color:#fff!important;border-color:${COLOR}!important}
-      .slt-modify-btn{background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:20px!important;padding:7px 16px!important;font-size:11px!important;font-weight:600!important;cursor:pointer!important}
-      .slt-qv-panel{background:#fff!important;border:1px solid #ebebeb!important;border-radius:14px!important;overflow:hidden!important;width:100%!important}
-      .slt-qv-imgs{display:flex!important;gap:6px!important;padding:10px!important;overflow-x:auto!important;background:#f8f8f8!important}
-      .slt-qv-imgs img{width:64px!important;height:80px!important;object-fit:cover!important;border-radius:8px!important;border:2px solid transparent!important;cursor:pointer!important;flex-shrink:0!important;transition:border-color 0.15s!important}
-      .slt-qv-imgs img.active{border-color:${COLOR}!important}
-      .slt-qv-main{width:100%!important;aspect-ratio:0.75!important;object-fit:cover!important;cursor:pointer!important}
-      .slt-qv-body{padding:14px!important}
-      .slt-qv-title{font-size:15px!important;font-weight:700!important;margin-bottom:6px!important;color:#111!important}
-      .slt-qv-desc{font-size:12px!important;color:#666!important;line-height:1.6!important;margin-bottom:12px!important}
-      .slt-qv-pdp-link{display:block!important;text-align:center!important;padding:9px!important;font-size:12px!important;color:${COLOR}!important;text-decoration:none!important;margin-bottom:6px!important;border:1px solid ${COLOR}!important;border-radius:9px!important;transition:all 0.15s!important}
-      .slt-qv-pdp-link:hover{background:${COLOR}!important;color:#fff!important}
-      .slt-qv-add{width:100%!important;background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:9px!important;padding:12px!important;font-size:14px!important;font-weight:600!important;cursor:pointer!important;margin-bottom:8px!important;transition:background 0.15s!important}
-      .slt-qv-add.slt-added{background:#1a7a4a!important}
-      .slt-qv-close{width:100%!important;background:none!important;border:1px solid #ddd!important;border-radius:9px!important;padding:10px!important;font-size:13px!important;cursor:pointer!important;color:#555!important}
-      .slt-load-more-wrap{margin-top:8px!important}
-      .slt-load-more{width:100%!important;background:#fff!important;border:1.5px solid ${COLOR}!important;border-radius:10px!important;padding:11px!important;font-size:13px!important;font-weight:600!important;cursor:pointer!important;transition:all 0.15s!important;color:${COLOR}!important}
-      .slt-load-more:hover{background:${COLOR}!important;color:#fff!important}
-      .slt-follow-chips{display:flex!important;flex-wrap:wrap!important;gap:6px!important;padding:4px 0!important}
-      .slt-follow-chip{background:#f4f4f4!important;border:1px solid #e5e5e5!important;border-radius:20px!important;padding:6px 14px!important;font-size:12px!important;cursor:pointer!important;white-space:nowrap!important;transition:background 0.15s!important}
-      .slt-follow-chip:hover{background:#e0e0e0!important}
-      #slt-chips{display:flex!important;flex-wrap:wrap!important;gap:6px!important;padding:0 14px 10px!important;flex-shrink:0!important}
-      .slt-chip{background:#f4f4f4!important;border:1px solid #e5e5e5!important;border-radius:20px!important;padding:7px 14px!important;font-size:12px!important;font-weight:500!important;cursor:pointer!important;white-space:nowrap!important;transition:background 0.15s!important}
-      .slt-chip:hover{background:#e0e0e0!important}
-      #slt-input-row{display:flex!important;gap:8px!important;padding:12px 14px!important;border-top:1px solid #f0f0f0!important;flex-shrink:0!important;background:#fff!important;align-items:center!important}
-      #slt-input{flex:1!important;border:1.5px solid #e5e5e5!important;border-radius:22px!important;padding:10px 16px!important;font-size:14px!important;outline:none!important;font-family:inherit!important;color:#111!important;background:#f8f8f8!important}
-      #slt-input:focus{border-color:${COLOR}!important;background:#fff!important}
-      #slt-send{background:${COLOR}!important;color:#fff!important;border:none!important;border-radius:50%!important;width:38px!important;height:38px!important;display:flex!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;transition:background 0.15s!important;flex-shrink:0!important}
-      #slt-send:disabled{background:#ccc!important;cursor:default!important}
-      #slt-send svg{width:16px!important;height:16px!important;fill:white!important}
-      #slt-hint{font-size:11px!important;color:#aaa!important;padding:0 14px 6px!important;flex-shrink:0!important;display:none!important}
-      #slt-hint.visible{display:block!important}
-    `;
-    document.head.appendChild(style);
-
-    let selectedSize = null;
-    const commonSizes = ['XS','S','M','L','XL','XXL','UK6','UK8','UK10','UK12','UK14','UK16','UK18','UK20'];
-
-    const launcher = document.createElement('button');
-    launcher.id = 'slt-launcher';
-    launcher.setAttribute('aria-label', 'Open shopping assistant');
-    launcher.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
-    document.body.appendChild(launcher);
-
-    const win = document.createElement('div');
-    win.id = 'slt-window';
-    win.classList.add('slt-hidden');
-    win.innerHTML = `
-      <div id="slt-header">
-        <div id="slt-header-left">
-          <div id="slt-header-dot"></div>
-          <span id="slt-header-title">Shopping Assistant</span>
-        </div>
-        <button id="slt-size-btn" class="slt-icon-btn" style="font-size:11px;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:20px;white-space:nowrap;">Size ▾</button>
-        <div id="slt-header-actions">
-          <button class="slt-icon-btn" id="slt-reset-btn" title="Reset">↺</button>
-          <button class="slt-icon-btn" id="slt-expand-btn" title="Expand">⤢</button>
-          <button class="slt-icon-btn" id="slt-close">✕</button>
-        </div>
-      </div>
-      <div id="slt-messages"></div>
-      <div id="slt-hint">Type to refine results · Want something new? Try a different search</div>
-      <div id="slt-chips"></div>
-      <div id="slt-input-row">
-        <input id="slt-input" type="text" placeholder="Ask me anything about fashion or products..." autocomplete="off"/>
-        <button id="slt-send"><svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
-      </div>
-    `;
-    document.body.appendChild(win);
-
-    // Size dropdown
-    const sizeDropdown = document.createElement('div');
-    sizeDropdown.id = 'slt-size-dropdown';
-    sizeDropdown.style.cssText = 'position:fixed;background:#fff;border:1px solid #e0e0e0;border-radius:12px;padding:12px;z-index:2147483648;box-shadow:0 4px 20px rgba(0,0,0,0.12);display:none;flex-wrap:wrap;gap:6px;width:220px;';
-    const clearBtn = document.createElement('button');
-    clearBtn.style.cssText = 'width:100%;background:none;border:1px solid #ddd;border-radius:6px;padding:6px;font-size:11px;cursor:pointer;margin-bottom:6px;color:#555;';
-    clearBtn.textContent = 'Clear size filter';
-    clearBtn.addEventListener('click', () => {
-      selectedSize = null;
-      document.getElementById('slt-size-btn').textContent = 'Size ▾';
-      sizeDropdown.style.display = 'none';
-    });
-    sizeDropdown.appendChild(clearBtn);
-    commonSizes.forEach(size => {
-      const btn = document.createElement('button');
-      btn.style.cssText = `border:1.5px solid #ddd;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:500;cursor:pointer;background:#fff;color:#333;transition:all 0.15s;`;
-      btn.textContent = size;
-      btn.addEventListener('click', () => {
-        selectedSize = size;
-        document.getElementById('slt-size-btn').textContent = `${size} ✕`;
-        sizeDropdown.style.display = 'none';
-      });
-      sizeDropdown.appendChild(btn);
-    });
-    document.body.appendChild(sizeDropdown);
-
-    document.getElementById('slt-size-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      const rect = e.target.getBoundingClientRect();
-      sizeDropdown.style.top = (rect.bottom + 8) + 'px';
-      sizeDropdown.style.right = '24px';
-      sizeDropdown.style.display = sizeDropdown.style.display === 'none' ? 'flex' : 'none';
-    });
-    document.addEventListener('click', () => { sizeDropdown.style.display = 'none'; });
-
-    const closeBtn = document.getElementById('slt-close');
-    const messages = document.getElementById('slt-messages');
-    const input = document.getElementById('slt-input');
-    const sendBtn = document.getElementById('slt-send');
-    const chipsContainer = document.getElementById('slt-chips');
-    const hintEl = document.getElementById('slt-hint');
-    const resetBtn = document.getElementById('slt-reset-btn');
-    const expandBtn = document.getElementById('slt-expand-btn');
-
-    let isOpen = false;
-    let isExpanded = false;
-    let lastProducts = [];
-    let currentSort = 'default';
-    let conversationHistory = [];
-    let hasShownResults = false;
-
-    function toggleWidget() {
-      isOpen = !isOpen;
-      win.classList.toggle('slt-hidden', !isOpen);
-      if (isOpen && messages.children.length === 0) {
-        addBotMessage(GREETING);
-        renderChips(CHIPS);
+  function loadSession() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      const data = JSON.parse(raw);
+      if (data.v !== 2) { localStorage.removeItem(STORAGE_KEY); return false; }
+      if (Date.now() - data.timestamp > SESSION_TTL) {
+        localStorage.removeItem(STORAGE_KEY);
+        return false;
       }
-      if (isOpen) setTimeout(() => input.focus(), 300);
+      state.sessionId    = data.sessionId    || state.sessionId;
+      state.messages     = data.messages     || [];
+      state.history      = data.history      || [];
+      state.selectedSizes = data.selectedSizes || [];
+      // Rebuild refineTerms from past user queries
+      state.messages
+        .filter(m => m.role === 'user')
+        .forEach(m => m.text.toLowerCase().split(/\s+/).forEach(w => state.refineTerms.add(w)));
+      return state.messages.length > 0;
+    } catch (_) {
+      return false;
     }
+  }
 
-    launcher.addEventListener('click', toggleWidget);
-    closeBtn.addEventListener('click', toggleWidget);
+  function clearSession() {
+    localStorage.removeItem(STORAGE_KEY);
+    state.messages = [];
+    state.history = [];
+    state.sessionId = uid();
+    state.pageExpanded = {};
+    state.refineTerms = new Set();
+    state.selectedSizes = [];
+  }
 
-    resetBtn.addEventListener('click', () => {
-      messages.innerHTML = '';
-      conversationHistory = [];
-      selectedSize = null;
-      hasShownResults = false;
-      hintEl.classList.remove('visible');
-      document.getElementById('slt-size-btn').textContent = 'Size ▾';
-      chipsContainer.innerHTML = '';
-      addBotMessage(GREETING);
-      renderChips(CHIPS);
-    });
+  // ─────────────────────────────────────────────
+  // FILTER EXTRACTION (from actual result products)
+  // ─────────────────────────────────────────────
+  function extractFilters(products) {
+    const colors      = new Set();
+    const collections = new Set();
+    const occasions   = new Set();
 
-    expandBtn.addEventListener('click', () => {
-      isExpanded = !isExpanded;
-      win.classList.toggle('slt-expanded', isExpanded);
-      expandBtn.textContent = isExpanded ? '⤡' : '⤢';
-    });
+    products.forEach(function (p) {
+      // ── Colors ──
+      if (p.color)  colors.add(p.color);
+      if (p.colour) colors.add(p.colour);
 
-    function renderChips(chips) {
-      chipsContainer.innerHTML = '';
-      chips.forEach(chip => {
-        const btn = document.createElement('button');
-        btn.className = 'slt-chip';
-        btn.textContent = chip;
-        btn.addEventListener('click', () => { chipsContainer.innerHTML = ''; sendMessage(chip); });
-        chipsContainer.appendChild(btn);
-      });
-    }
-
-    function addBotMessage(text) {
-      const div = document.createElement('div');
-      div.className = 'slt-msg slt-bot';
-      div.textContent = text;
-      messages.appendChild(div);
-      setTimeout(() => div.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-    }
-
-    function addUserMessage(text) {
-      const div = document.createElement('div');
-      div.className = 'slt-msg slt-user';
-      div.textContent = text;
-      messages.appendChild(div);
-      messages.scrollTop = messages.scrollHeight;
-    }
-
-    function showTyping() {
-      const div = document.createElement('div');
-      div.className = 'slt-typing';
-      div.id = 'slt-typing-ind';
-      div.innerHTML = '<span></span><span></span><span></span>';
-      messages.appendChild(div);
-      messages.scrollTop = messages.scrollHeight;
-    }
-
-    function hideTyping() {
-      const t = document.getElementById('slt-typing-ind');
-      if (t) t.remove();
-    }
-
-    function refreshCartCount() {
-      fetch('/cart.js')
-        .then(r => r.json())
-        .then(cart => {
-          const count = cart.item_count;
-
-          fetch('/?sections=header')
-            .then(r => r.json())
-            .then(sections => {
-              if (sections.header) {
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(sections.header, 'text/html');
-                const newBubble = doc.querySelector('#cart-icon-bubble');
-                const oldBubble = document.querySelector('#cart-icon-bubble');
-                if (newBubble && oldBubble) {
-                  oldBubble.innerHTML = newBubble.innerHTML;
-                  oldBubble.classList.remove('hidden');
-                }
-              }
-            }).catch(() => {});
-
-          document.querySelectorAll(
-            '#cart-icon-bubble span:not(.visually-hidden),.cart-count-bubble span:not(.visually-hidden)'
-          ).forEach(el => { el.textContent = count; });
-
-          setTimeout(() => {
-            const cartIcon = document.getElementById('cart-icon-bubble') ||
-              document.querySelector('[data-cart-toggle],[aria-controls="CartDrawer"],[aria-controls="cart-drawer"]');
-            if (cartIcon) cartIcon.click();
-          }, 300);
-
-        }).catch(() => {});
-    }
-
-    function sortProducts(products, sort) {
-      const sorted = [...products];
-      if (sort === 'price-asc') sorted.sort((a, b) => parseFloat(a.price?.replace('$', '') || 0) - parseFloat(b.price?.replace('$', '') || 0));
-      else if (sort === 'price-desc') sorted.sort((a, b) => parseFloat(b.price?.replace('$', '') || 0) - parseFloat(a.price?.replace('$', '') || 0));
-      return sorted;
-    }
-
-    function createProductCard(p) {
-      const card = document.createElement('div');
-      card.className = 'slt-card';
-      let selectedVariantId = p.variantId;
-      let currentImgIndex = 0;
-      const images = p.images?.length ? p.images : (p.image ? [p.image] : []);
-      const productUrl = p.url || `/products/${p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-
-      let saveBadge = '';
-      if (p.comparePrice && p.price) {
-        const orig = parseFloat(p.comparePrice.replace('$', ''));
-        const curr = parseFloat(p.price.replace('$', ''));
-        if (orig > curr) { const pct = Math.round((orig - curr) / orig * 100); saveBadge = `<span class="slt-card-badge slt-badge-sale">-${pct}%</span>`; }
-      }
-
-      const outBadge = !p.available ? '<span class="slt-card-badge slt-badge-out">Out of stock</span>' : '';
-      const dotsHtml = images.length > 1
-        ? `<div class="slt-img-dots">${images.map((_, i) => `<div class="slt-img-dot${i === 0 ? ' active' : ''}"></div>`).join('')}</div>`
-        : '';
-      const safeId = p.id.split('/').pop();
-
-      card.innerHTML = `
-        <div class="slt-card-img-wrap">
-          ${outBadge}${saveBadge}
-          <img id="sltcimg-${safeId}" src="${images[0] || ''}" alt="${p.title}" onerror="this.style.background='#f0f0f0'"/>
-          ${dotsHtml}
-          <div class="slt-card-actions-top">
-            <button class="slt-card-icon-btn" id="sltcqv-${safeId}" title="Quick view">⤢</button>
-          </div>
-        </div>
-        <div class="slt-card-body">
-          <div class="slt-card-title">${p.title}</div>
-          <div class="slt-card-prices">
-            <span class="slt-price">${p.price || ''}</span>
-            ${p.comparePrice ? `<span class="slt-compare">${p.comparePrice}</span>` : ''}
-          </div>
-          <div class="slt-variants" id="sltcvars-${safeId}"></div>
-          <div class="slt-card-actions">
-            <button class="slt-add" id="sltcadd-${safeId}">${p.available ? 'Add to Cart' : 'Out of Stock'}</button>
-          </div>
-        </div>
-      `;
-
-      // Whole card click opens quick view
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('.slt-add, .slt-variant-pill, #sltcqv-' + safeId)) return;
-        card.querySelector(`#sltcqv-${safeId}`)?.click();
-      });
-
-      // Image cycling on hover
-      const imgEl = card.querySelector(`#sltcimg-${safeId}`);
-      const dots = card.querySelectorAll('.slt-img-dot');
-      if (images.length > 1) {
-        let imgTimer;
-        card.querySelector('.slt-card-img-wrap').addEventListener('mouseenter', () => {
-          imgTimer = setInterval(() => {
-            currentImgIndex = (currentImgIndex + 1) % images.length;
-            imgEl.src = images[currentImgIndex];
-            dots.forEach((d, i) => d.classList.toggle('active', i === currentImgIndex));
-          }, 1400);
+      if (Array.isArray(p.options)) {
+        p.options.forEach(function (opt) {
+          if (/colou?r/i.test(opt.name)) {
+            (opt.values || []).forEach(function (v) { colors.add(v); });
+          }
         });
-        card.querySelector('.slt-card-img-wrap').addEventListener('mouseleave', () => {
-          clearInterval(imgTimer);
-          currentImgIndex = 0;
-          imgEl.src = images[0];
-          dots.forEach((d, i) => d.classList.toggle('active', i === 0));
+      }
+      if (Array.isArray(p.variants) && Array.isArray(p.options)) {
+        p.variants.forEach(function (v) {
+          p.options.forEach(function (opt, i) {
+            if (/colou?r/i.test(opt.name)) {
+              const val = v['option' + (i + 1)];
+              if (val) colors.add(val);
+            }
+          });
         });
       }
 
-      // Variant pills — show filtered sizes only
-      const variantContainer = card.querySelector(`#sltcvars-${safeId}`);
-      if (p.variants.length > 1) {
-        let displayVariants = p.variants;
+      // ── Collections / product type ──
+      if (p.product_type) collections.add(p.product_type);
+      if (p.type)         collections.add(p.type);
+      if (p.vendor)       collections.add(p.vendor);
 
-        if (selectedSize) {
-          const sizeMatch = p.variants.filter(v =>
-            v.title.toLowerCase().includes(selectedSize.toLowerCase()) ||
-            v.options?.some(o => o.label?.toLowerCase().includes(selectedSize.toLowerCase()))
+      // ── Tags ──
+      const rawTags = Array.isArray(p.tags)
+        ? p.tags
+        : (typeof p.tags === 'string' ? p.tags.split(',').map(function(t){ return t.trim(); }) : []);
+
+      rawTags.forEach(function (t) {
+        if (!t) return;
+        if (/occasion|party|casual|formal|wedding|beach|evening|garden|holiday|gala|prom/i.test(t)) {
+          occasions.add(t);
+        }
+      });
+    });
+
+    return {
+      colors:      [...colors].filter(Boolean).slice(0, 8),
+      collections: [...collections].filter(Boolean).slice(0, 6),
+      occasions:   [...occasions].filter(Boolean).slice(0, 6),
+    };
+  }
+
+  // ─────────────────────────────────────────────
+  // PRODUCT CARD HTML
+  // ─────────────────────────────────────────────
+  function productCardHtml(product, gridMode) {
+    const img     = (product.featured_image && product.featured_image.src) ||
+                    product.image ||
+                    (Array.isArray(product.images) && product.images[0] && product.images[0].src) ||
+                    (Array.isArray(product.images) && product.images[0]) || '';
+    const price   = formatPrice(product.price_min || product.price || 0);
+    const cmpRaw  = product.compare_at_price_min || product.compare_at_price || null;
+    const onSale  = cmpRaw && parseFloat(cmpRaw) > parseFloat(product.price_min || product.price || 0);
+
+    // Size variant pills — only show sizes user has selected, if any
+    const sizeOpt  = Array.isArray(product.options) && product.options.find(function(o){ return /^size$/i.test(o.name); });
+    const allSizes = sizeOpt ? (sizeOpt.values || []) : [];
+    const showSizes = state.selectedSizes.length > 0
+      ? allSizes.filter(function(s){
+          return state.selectedSizes.some(function(sel){
+            return s.toLowerCase().includes(sel.toLowerCase()) || sel.toLowerCase().includes(s.toLowerCase());
+          });
+        })
+      : [];
+
+    // Inline-safe product data (stripped to essentials for card)
+    const cardData = JSON.stringify({
+      id:          product.id,
+      title:       product.title,
+      handle:      product.handle || '',
+      price:       product.price_min || product.price || 0,
+      compare_at:  cmpRaw,
+      images:      Array.isArray(product.images)
+        ? product.images.map(function(im){ return im && (im.src || im); })
+        : (img ? [img] : []),
+      options:     product.options  || [],
+      variants:    (product.variants || []).map(function(v){
+        return { id: v.id, title: v.title, price: v.price, option1: v.option1, option2: v.option2, option3: v.option3, available: v.available };
+      }),
+      body_html:   product.body_html  || product.description || '',
+      product_type: product.product_type || '',
+    });
+
+    const firstVariantId = product.variants && product.variants[0] ? product.variants[0].id : '';
+
+    return (
+      '<div class="slt-product-card' + (gridMode ? ' slt-card-grid' : '') + '"' +
+        ' data-product=\'' + esc(cardData) + '\'' +
+        ' tabindex="0" role="button" aria-label="' + esc(product.title) + '">' +
+        '<div class="slt-card-img-wrap">' +
+          '<img class="slt-card-img" src="' + esc(img) + '" alt="' + esc(product.title) + '" loading="lazy" />' +
+          (onSale ? '<span class="slt-card-badge">SALE</span>' : '') +
+          '<button class="slt-card-cart-btn" data-variant-id="' + esc(firstVariantId) + '" title="Quick add to cart" aria-label="Add to cart">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>' +
+          '</button>' +
+        '</div>' +
+        '<div class="slt-card-info">' +
+          '<div class="slt-card-title">' + esc(product.title) + '</div>' +
+          '<div class="slt-card-price">' +
+            '<span class="slt-price-now">' + price + '</span>' +
+            (onSale ? '<span class="slt-price-was">' + formatPrice(cmpRaw) + '</span>' : '') +
+          '</div>' +
+          (showSizes.length > 0
+            ? '<div class="slt-variant-pills">' +
+                showSizes.slice(0, 4).map(function(s){ return '<span class="slt-variant-pill">' + esc(s) + '</span>'; }).join('') +
+              '</div>'
+            : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // PRODUCTS BLOCK (carousel or grid)
+  // ─────────────────────────────────────────────
+  function productsBlockHtml(msgId, allProducts, expanded) {
+    const shown     = expanded ? allProducts : allProducts.slice(0, PAGE_SIZE);
+    const remaining = allProducts.length - PAGE_SIZE;
+    const gridMode  = expanded;
+
+    return (
+      '<div class="slt-products-wrap ' + (expanded ? 'slt-products-grid' : 'slt-products-carousel') + '" id="slt-pw-' + msgId + '">' +
+        '<div class="slt-products-inner" id="slt-pi-' + msgId + '">' +
+          shown.map(function(p){ return productCardHtml(p, gridMode); }).join('') +
+        '</div>' +
+        (!expanded && allProducts.length > 1 ?
+          '<div class="slt-carousel-arrows">' +
+            '<button class="slt-arr slt-arr-prev" data-mid="' + msgId + '" aria-label="Previous">&#8249;</button>' +
+            '<button class="slt-arr slt-arr-next" data-mid="' + msgId + '" aria-label="Next">&#8250;</button>' +
+          '</div>'
+        : '') +
+      '</div>' +
+      (allProducts.length > PAGE_SIZE ?
+        '<div class="slt-pagination" id="slt-pag-' + msgId + '">' +
+          (!expanded
+            ? '<button class="slt-more-btn" data-mid="' + msgId + '" data-action="expand">Show ' + remaining + ' More Curated Styles</button>'
+            : '<button class="slt-more-btn slt-less-btn" data-mid="' + msgId + '" data-action="collapse">Show Less Curated Styles</button>'
+          ) +
+        '</div>'
+      : '')
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // MAKE IT YOURS (filter pills from actual products)
+  // ─────────────────────────────────────────────
+  function makeItYoursHtml(products, msgId, originalQuery) {
+    const f        = extractFilters(products);
+    const sections = [];
+
+    if (f.colors.length > 0) {
+      sections.push({ label: 'Shop by Color', values: f.colors });
+    }
+    if (f.collections.length > 0) {
+      sections.push({ label: 'Shop by Style', values: f.collections });
+    }
+    if (f.occasions.length > 0) {
+      sections.push({ label: 'Shop by Occasion', values: f.occasions });
+    }
+
+    if (sections.length === 0) return '';
+
+    return (
+      '<div class="slt-miy" id="slt-miy-' + msgId + '">' +
+        '<div class="slt-miy-label">Make it yours</div>' +
+        sections.map(function (sec) {
+          return (
+            '<div class="slt-miy-section">' +
+              '<div class="slt-miy-sec-title">' + esc(sec.label) + '</div>' +
+              '<div class="slt-miy-chips">' +
+                sec.values.map(function (v) {
+                  return '<button class="slt-miy-chip"' +
+                    ' data-val="' + esc(v) + '"' +
+                    ' data-orig="' + esc(originalQuery) + '">' +
+                    esc(v) + '</button>';
+                }).join('') +
+              '</div>' +
+            '</div>'
           );
-          displayVariants = sizeMatch.length > 0 ? sizeMatch : p.variants.slice(0, 1);
-        } else {
-          displayVariants = p.variants.slice(0, 2);
+        }).join('') +
+      '</div>'
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // MESSAGE ELEMENT
+  // ─────────────────────────────────────────────
+  function buildMessageEl(msg) {
+    const el = document.createElement('div');
+    el.className = 'slt-msg slt-msg--' + msg.role;
+    el.dataset.mid = msg.id;
+
+    if (msg.role === 'user') {
+      el.innerHTML =
+        '<div class="slt-bubble slt-bubble-user">' + esc(msg.text) + '</div>';
+    } else {
+      const expanded    = !!state.pageExpanded[msg.id];
+      const hasProducts = msg.allProducts && msg.allProducts.length > 0;
+
+      el.innerHTML =
+        '<div class="slt-bubble slt-bubble-ai">' +
+          (msg.text
+            ? '<div class="slt-msg-text">' + esc(msg.text).replace(/\n/g, '<br>') + '</div>'
+            : '') +
+          (hasProducts ? productsBlockHtml(msg.id, msg.allProducts, expanded) : '') +
+          (hasProducts ? makeItYoursHtml(msg.allProducts, msg.id, msg.query || '') : '') +
+        '</div>';
+    }
+    return el;
+  }
+
+  function appendMessageEl(msg) {
+    const wrap = document.getElementById('slt-messages');
+    if (!wrap) return;
+    const el = buildMessageEl(msg);
+    wrap.appendChild(el);
+    bindCardListeners(el);
+    el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
+
+  function restoreAllMessages() {
+    const wrap = document.getElementById('slt-messages');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    state.messages.forEach(function (msg) {
+      const el = buildMessageEl(msg);
+      wrap.appendChild(el);
+      bindCardListeners(el);
+    });
+    if (wrap.lastElementChild) {
+      wrap.lastElementChild.scrollIntoView({ block: 'end' });
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // EXPAND / COLLAPSE PRODUCTS
+  // ─────────────────────────────────────────────
+  function toggleExpansion(msgId, expand) {
+    state.pageExpanded[msgId] = expand;
+    const msg = state.messages.find(function (m) { return m.id === msgId; });
+    if (!msg || !msg.allProducts) return;
+
+    const pw  = document.getElementById('slt-pw-' + msgId);
+    const pi  = document.getElementById('slt-pi-' + msgId);
+    const pag = document.getElementById('slt-pag-' + msgId);
+
+    if (pi) {
+      const shown = expand ? msg.allProducts : msg.allProducts.slice(0, PAGE_SIZE);
+      pi.innerHTML = shown.map(function (p) { return productCardHtml(p, expand); }).join('');
+    }
+    if (pw) {
+      pw.className = 'slt-products-wrap ' + (expand ? 'slt-products-grid' : 'slt-products-carousel');
+    }
+    if (pag) {
+      const remaining = msg.allProducts.length - PAGE_SIZE;
+      pag.innerHTML = expand
+        ? '<button class="slt-more-btn slt-less-btn" data-mid="' + msgId + '" data-action="collapse">Show Less Curated Styles</button>'
+        : '<button class="slt-more-btn" data-mid="' + msgId + '" data-action="expand">Show ' + remaining + ' More Curated Styles</button>';
+    }
+
+    // Re-bind listeners in this message node
+    const msgEl = document.querySelector('[data-mid="' + msgId + '"]');
+    if (msgEl) bindCardListeners(msgEl);
+  }
+
+  // ─────────────────────────────────────────────
+  // PRODUCT DRAWER
+  // ─────────────────────────────────────────────
+  function openProductDrawer(product) {
+    const existing = document.getElementById('slt-pd');
+    if (existing) existing.remove();
+
+    const images = (Array.isArray(product.images) ? product.images : [])
+      .map(function (im) { return im && (im.src || im); })
+      .filter(Boolean);
+    if (images.length === 0 && product.image) images.push(product.image);
+
+    const variants   = product.variants || [];
+    const price      = formatPrice(product.price_min || product.price || (variants[0] && variants[0].price) || 0);
+    const cmpPrice   = product.compare_at || product.compare_at_price_min || null;
+    const sizeOpt    = (product.options || []).find(function (o) { return /^size$/i.test(o.name); });
+    const sizeValues = sizeOpt ? (sizeOpt.values || []) : [];
+    const descHtml   = (product.body_html || product.description || '').replace(/<script[^>]*>.*?<\/script>/gi, '');
+
+    const drawer = document.createElement('div');
+    drawer.id    = 'slt-pd';
+    drawer.innerHTML =
+      '<div class="slt-pd-overlay" id="slt-pd-overlay"></div>' +
+      '<div class="slt-pd-panel" id="slt-pd-panel">' +
+        '<button class="slt-pd-close" id="slt-pd-close" aria-label="Close">&#10005;</button>' +
+
+        // Images
+        '<div class="slt-pd-images">' +
+          '<div class="slt-pd-main-wrap">' +
+            '<img id="slt-pd-main-img" src="' + esc(images[0] || '') + '" alt="' + esc(product.title) + '" />' +
+            (images.length > 1
+              ? '<button class="slt-pd-arrow slt-pd-prev" data-dir="-1" aria-label="Previous image">&#8249;</button>' +
+                '<button class="slt-pd-arrow slt-pd-next" data-dir="1"  aria-label="Next image">&#8250;</button>'
+              : '') +
+          '</div>' +
+          (images.length > 1
+            ? '<div class="slt-pd-thumbs">' +
+                images.slice(0, 6).map(function (src, i) {
+                  return '<img class="slt-pd-thumb ' + (i === 0 ? 'active' : '') + '" src="' + esc(src) + '" data-idx="' + i + '" alt="" loading="lazy" />';
+                }).join('') +
+              '</div>'
+            : '') +
+        '</div>' +
+
+        // Details
+        '<div class="slt-pd-details">' +
+          '<h2 class="slt-pd-name">' + esc(product.title) + '</h2>' +
+          '<div class="slt-pd-price-row">' +
+            '<span class="slt-pd-price-now">' + price + '</span>' +
+            (cmpPrice ? '<span class="slt-pd-price-was">' + formatPrice(cmpPrice) + '</span>' : '') +
+          '</div>' +
+
+          (sizeValues.length > 0
+            ? '<div class="slt-pd-size-section">' +
+                '<div class="slt-pd-size-label" id="slt-pd-size-label">Select Size</div>' +
+                '<div class="slt-pd-size-btns">' +
+                  sizeValues.map(function (s) {
+                    return '<button class="slt-pd-size-btn" data-size="' + esc(s) + '">' + esc(s) + '</button>';
+                  }).join('') +
+                '</div>' +
+              '</div>'
+            : '') +
+
+          (descHtml
+            ? '<div class="slt-pd-desc">' + descHtml + '</div>'
+            : '') +
+
+          '<div class="slt-pd-footer">' +
+            '<button class="slt-pd-atc" id="slt-pd-atc"' +
+              ' data-variant-id="' + esc((variants[0] && variants[0].id) || '') + '">' +
+              'Add to Cart' +
+            '</button>' +
+            (product.handle
+              ? '<a class="slt-pd-pdp-link" href="/products/' + esc(product.handle) + '" target="_blank" rel="noopener">View Full Details ↗</a>'
+              : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(drawer);
+
+    // Animate open
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        var panel = document.getElementById('slt-pd-panel');
+        if (panel) panel.classList.add('slt-pd-open');
+      });
+    });
+
+    var currentIdx = 0;
+
+    function setImage(idx) {
+      currentIdx = (idx + images.length) % images.length;
+      var mainImg = document.getElementById('slt-pd-main-img');
+      if (mainImg) mainImg.src = images[currentIdx];
+      drawer.querySelectorAll('.slt-pd-thumb').forEach(function (t, i) {
+        t.classList.toggle('active', i === currentIdx);
+      });
+    }
+
+    drawer.querySelector('#slt-pd-overlay').addEventListener('click', closeProductDrawer);
+    drawer.querySelector('#slt-pd-close').addEventListener('click', closeProductDrawer);
+
+    drawer.querySelectorAll('.slt-pd-arrow').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        setImage(currentIdx + parseInt(btn.dataset.dir, 10));
+      });
+    });
+
+    drawer.querySelectorAll('.slt-pd-thumb').forEach(function (thumb) {
+      thumb.addEventListener('click', function () {
+        setImage(parseInt(thumb.dataset.idx, 10));
+      });
+    });
+
+    // Size selection
+    var selectedVariantId = (variants[0] && variants[0].id) || '';
+
+    drawer.querySelectorAll('.slt-pd-size-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        drawer.querySelectorAll('.slt-pd-size-btn').forEach(function (b) { b.classList.remove('sel'); });
+        btn.classList.add('sel');
+        var sz = btn.dataset.size;
+        var match = variants.find(function (v) {
+          return v.option1 === sz || v.option2 === sz || v.option3 === sz;
+        });
+        if (match) {
+          selectedVariantId = match.id;
+          document.getElementById('slt-pd-atc').dataset.variantId = match.id;
         }
-
-        displayVariants.forEach((v, i) => {
-          const pill = document.createElement('button');
-          pill.className = 'slt-variant-pill' + (i === 0 ? ' selected' : '');
-          const sizeLabel = v.options?.find(o => o.name === 'Size')?.label || v.title.split('/')[0].trim();
-          pill.textContent = sizeLabel;
-          if (!v.available) pill.style.opacity = '0.4';
-          pill.addEventListener('click', (e) => {
-            e.stopPropagation();
-            selectedVariantId = v.id;
-            variantContainer.querySelectorAll('.slt-variant-pill').forEach(vp => vp.classList.remove('selected'));
-            pill.classList.add('selected');
-          });
-          variantContainer.appendChild(pill);
-        });
-
-        const remaining = p.variants.length - displayVariants.length;
-        if (remaining > 0) {
-          const more = document.createElement('span');
-          more.className = 'slt-variant-more';
-          more.textContent = `+${remaining} sizes`;
-          variantContainer.appendChild(more);
-        }
-      }
-
-      // Quick view button
-      card.querySelector(`#sltcqv-${safeId}`).addEventListener('click', (e) => {
-        e.stopPropagation();
-        const existing = document.getElementById('slt-qv-active');
-        if (existing) existing.remove();
-        const qv = renderQuickView(p, productUrl);
-        qv.id = 'slt-qv-active';
-        messages.appendChild(qv);
-        setTimeout(() => qv.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+        var lbl = document.getElementById('slt-pd-size-label');
+        if (lbl) { lbl.textContent = 'Select Size'; lbl.style.color = ''; }
       });
+    });
 
-      // Add to cart
-      const addBtn = card.querySelector(`#sltcadd-${safeId}`);
-      if (p.available) {
-        addBtn.addEventListener('click', async function (e) {
-          e.stopPropagation();
-          this.disabled = true;
-          this.textContent = '...';
-          const numericId = selectedVariantId.replace('gid://shopify/ProductVariant/', '');
-          try {
-            const r = await fetch('/cart/add.js', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ items: [{ id: parseInt(numericId), quantity: 1 }] })
-            });
-            const data = await r.json();
-            if (data.items) {
-              this.textContent = 'Added ✓';
-              this.classList.add('slt-added');
-              refreshCartCount();
-            } else {
-              this.textContent = 'Error';
-              this.disabled = false;
-            }
-          } catch {
-            this.textContent = 'Error';
-            this.disabled = false;
-          }
-        });
-      } else {
-        addBtn.disabled = true;
-      }
-
-      return card;
-    }
-
-    function renderQuickView(p, productUrl) {
-      const panel = document.createElement('div');
-      panel.className = 'slt-qv-panel';
-      const images = p.images?.length ? p.images : (p.image ? [p.image] : []);
-      let selectedVariantId = p.variantId;
-      const pdpUrl = productUrl || `/products/${p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-
-      panel.innerHTML = `
-        <img class="slt-qv-main" id="slt-qv-mainimg" src="${images[0] || ''}" alt="${p.title}"/>
-        <div class="slt-qv-imgs" id="slt-qv-thumbs"></div>
-        <div class="slt-qv-body">
-          <div class="slt-qv-title">${p.title}</div>
-          <div class="slt-card-prices" style="margin-bottom:10px">
-            <span class="slt-price">${p.price || ''}</span>
-            ${p.comparePrice ? `<span class="slt-compare">${p.comparePrice}</span>` : ''}
-          </div>
-          <div class="slt-qv-desc">${p.description || 'No description available.'}</div>
-          <div class="slt-variants" id="slt-qv-vars" style="margin-bottom:12px;flex-wrap:wrap;display:flex;gap:6px;"></div>
-          <button class="slt-qv-add" id="slt-qv-addbtn">Add to Cart</button>
-          <a href="${pdpUrl}" target="_blank" class="slt-qv-pdp-link">View full product page ↗</a>
-          <button class="slt-qv-close" id="slt-qv-closebtn">← Back to results</button>
-        </div>
-      `;
-
-      // Make main image clickable to PDP
-      panel.querySelector('.slt-qv-main').addEventListener('click', () => {
-        window.open(pdpUrl, '_blank');
-      });
-
-      const mainImg = panel.querySelector('#slt-qv-mainimg');
-      const thumbsContainer = panel.querySelector('#slt-qv-thumbs');
-      images.forEach((img, i) => {
-        const thumb = document.createElement('img');
-        thumb.src = img;
-        if (i === 0) thumb.classList.add('active');
-        thumb.addEventListener('click', () => {
-          mainImg.src = img;
-          thumbsContainer.querySelectorAll('img').forEach(t => t.classList.remove('active'));
-          thumb.classList.add('active');
-        });
-        thumbsContainer.appendChild(thumb);
-      });
-
-      const qvVars = panel.querySelector('#slt-qv-vars');
-      if (p.variants.length > 1) {
-        p.variants.forEach((v, i) => {
-          const pill = document.createElement('button');
-          pill.className = 'slt-variant-pill' + (i === 0 ? ' selected' : '');
-          const sizeLabel = v.options?.find(o => o.name === 'Size')?.label || v.title.split('/')[0].trim();
-          pill.textContent = sizeLabel;
-          if (!v.available) pill.style.opacity = '0.4';
-          pill.style.cssText += 'padding:5px 12px;font-size:11px;';
-          pill.addEventListener('click', () => {
-            selectedVariantId = v.id;
-            qvVars.querySelectorAll('.slt-variant-pill').forEach(vp => vp.classList.remove('selected'));
-            pill.classList.add('selected');
-          });
-          qvVars.appendChild(pill);
-        });
-      }
-
-      const addBtn = panel.querySelector('#slt-qv-addbtn');
-      addBtn.addEventListener('click', async function () {
-        this.disabled = true;
-        this.textContent = '...';
-        const numericId = selectedVariantId.replace('gid://shopify/ProductVariant/', '');
-        try {
-          const r = await fetch('/cart/add.js', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items: [{ id: parseInt(numericId), quantity: 1 }] })
-          });
-          const data = await r.json();
-          if (data.items) {
-            this.textContent = 'Added to Cart ✓';
-            this.classList.add('slt-added');
-            refreshCartCount();
-          } else {
-            this.textContent = 'Error — try again';
-            this.disabled = false;
-          }
-        } catch {
-          this.textContent = 'Error — try again';
-          this.disabled = false;
-        }
-      });
-
-      panel.querySelector('#slt-qv-closebtn').addEventListener('click', () => panel.remove());
-      return panel;
-    }
-
-    function createLoadMoreBtn(query, cursor) {
-      const btn = document.createElement('button');
-      btn.className = 'slt-load-more';
-      btn.textContent = 'Show more styles';
-      btn.addEventListener('click', async () => {
-        btn.textContent = 'Loading...';
-        btn.disabled = true;
-        try {
-          const r = await fetch(API_URL + '/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shop: SHOP, message: query, cursor, history: conversationHistory })
-          });
-          const data = await r.json();
-          if (data.products?.length) {
-            btn.closest('.slt-load-more-wrap')?.remove();
-            const slider = messages.querySelector('.slt-slider');
-            if (slider) {
-              data.products.forEach(p => { lastProducts.push(p); slider.appendChild(createProductCard(p)); });
-              if (data.cursor) {
-                const wrap = document.createElement('div');
-                wrap.className = 'slt-load-more-wrap';
-                wrap.appendChild(createLoadMoreBtn(query, data.cursor));
-                slider.closest('.slt-products').appendChild(wrap);
-              }
-            }
-            messages.scrollTop = messages.scrollHeight;
-          } else { btn.textContent = 'No more results'; }
-        } catch { btn.textContent = 'Error — try again'; btn.disabled = false; }
-      });
-      return btn;
-    }
-
-    function rebuildSlider(products, sliderEl) {
-      sliderEl.innerHTML = '';
-      products.forEach(p => sliderEl.appendChild(createProductCard(p)));
-    }
-
-    function renderRefinePanel(searchQuery) {
-      const panel = document.createElement('div');
-      panel.className = 'slt-refine-panel';
-
-      const searchedTerms = conversationHistory
-        .filter(m => m.role === 'user')
-        .map(m => m.content.toLowerCase());
-
-      const allOptions = [
-        { label: 'Under $50', query: `${searchQuery} under $50` },
-        { label: 'Under $100', query: `${searchQuery} under $100` },
-        { label: 'Black', query: `black ${searchQuery}` },
-        { label: 'White', query: `white ${searchQuery}` },
-        { label: 'Red', query: `red ${searchQuery}` },
-        { label: 'New arrivals', query: `new arrival ${searchQuery}` },
-        { label: 'Sequin', query: `sequin ${searchQuery}` },
-        { label: 'Maxi length', query: `maxi ${searchQuery}` },
-      ];
-
-      const filteredOptions = allOptions.filter(opt =>
-        !searchedTerms.some(term =>
-          term.includes(opt.label.toLowerCase()) ||
-          term.includes(opt.query.toLowerCase().split(' ')[0])
-        )
-      ).slice(0, 5);
-
-      if (!filteredOptions.length) return document.createElement('div');
-
-      panel.innerHTML = `
-        <div class="slt-refine-title">Make it yours</div>
-        <div class="slt-refine-sub">Refine your results:</div>
-        <div class="slt-refine-chips" id="slt-refine-chips-container"></div>
-        <button class="slt-modify-btn" id="slt-modify-btn">Modify the results</button>
-      `;
-
-      const container = panel.querySelector('#slt-refine-chips-container');
-      filteredOptions.forEach(opt => {
-        const btn = document.createElement('button');
-        btn.className = 'slt-refine-chip';
-        btn.textContent = opt.label;
-        btn.addEventListener('click', () => { panel.remove(); sendMessage(opt.query); });
-        container.appendChild(btn);
-      });
-
-      panel.querySelector('#slt-modify-btn').addEventListener('click', () => {
-        input.value = `Show me ${searchQuery} but `;
-        input.focus();
-        panel.remove();
-      });
-
-      return panel;
-    }
-
-    function renderProducts(products, query, cursor) {
-      if (!products.length) return;
-      lastProducts = products;
-      currentSort = 'default';
-      hasShownResults = true;
-      hintEl.classList.add('visible');
-
-      const wrapper = document.createElement('div');
-      wrapper.className = 'slt-products';
-
-      const filterBar = document.createElement('div');
-      filterBar.className = 'slt-filter-bar';
-      let sliderEl;
-
-      [{ label: 'Price ↑', value: 'price-asc' }, { label: 'Price ↓', value: 'price-desc' }, { label: 'In stock', value: 'in-stock' }].forEach(f => {
-        const btn = document.createElement('button');
-        btn.className = 'slt-filter-btn';
-        btn.textContent = f.label;
-        btn.addEventListener('click', () => {
-          const isActive = btn.classList.contains('active');
-          filterBar.querySelectorAll('.slt-filter-btn').forEach(b => b.classList.remove('active'));
-          if (isActive) { currentSort = 'default'; rebuildSlider(lastProducts, sliderEl); }
-          else {
-            btn.classList.add('active');
-            currentSort = f.value;
-            let filtered = [...lastProducts];
-            if (f.value === 'in-stock') filtered = filtered.filter(p => p.available);
-            else filtered = sortProducts(filtered, f.value);
-            rebuildSlider(filtered, sliderEl);
-          }
-        });
-        filterBar.appendChild(btn);
-      });
-      wrapper.appendChild(filterBar);
-
-      const sliderWrap = document.createElement('div');
-      sliderWrap.className = 'slt-slider-wrap';
-
-      const prevBtn = document.createElement('button');
-      prevBtn.className = 'slt-slider-btn slt-slider-prev';
-      prevBtn.innerHTML = '&#8249;';
-
-      const nextBtn = document.createElement('button');
-      nextBtn.className = 'slt-slider-btn slt-slider-next';
-      nextBtn.innerHTML = '&#8250;';
-
-      sliderEl = document.createElement('div');
-      sliderEl.className = 'slt-slider';
-      products.forEach(p => sliderEl.appendChild(createProductCard(p)));
-
-      prevBtn.addEventListener('click', () => sliderEl.scrollBy({ left: -175, behavior: 'smooth' }));
-      nextBtn.addEventListener('click', () => sliderEl.scrollBy({ left: 175, behavior: 'smooth' }));
-
-      let isDown = false, startX, scrollLeft;
-      sliderEl.addEventListener('mousedown', e => { isDown = true; startX = e.pageX - sliderEl.offsetLeft; scrollLeft = sliderEl.scrollLeft; });
-      sliderEl.addEventListener('mouseleave', () => { isDown = false; });
-      sliderEl.addEventListener('mouseup', () => { isDown = false; });
-      sliderEl.addEventListener('mousemove', e => {
-        if (!isDown) return;
-        e.preventDefault();
-        sliderEl.scrollLeft = scrollLeft - (e.pageX - sliderEl.offsetLeft - startX) * 1.5;
-      });
-
-      sliderWrap.appendChild(prevBtn);
-      sliderWrap.appendChild(sliderEl);
-      sliderWrap.appendChild(nextBtn);
-      wrapper.appendChild(sliderWrap);
-
-      if (cursor) {
-        const wrap = document.createElement('div');
-        wrap.className = 'slt-load-more-wrap';
-        wrap.appendChild(createLoadMoreBtn(query, cursor));
-        wrapper.appendChild(wrap);
-      }
-
-      messages.appendChild(wrapper);
-      messages.appendChild(renderRefinePanel(query));
-      setTimeout(() => wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-    }
-
-    function renderFollowUpChips(chips) {
-      if (!chips?.length) return;
-
-      const searchedTerms = conversationHistory
-        .filter(m => m.role === 'user')
-        .map(m => m.content.toLowerCase());
-
-      const filtered = chips.filter(chip =>
-        !searchedTerms.some(term =>
-          term.includes(chip.toLowerCase().replace('show ', '').replace('in ', '').replace('what ', ''))
-        )
-      );
-
-      if (!filtered.length) return;
-
-      const wrapper = document.createElement('div');
-      wrapper.className = 'slt-follow-chips';
-      filtered.forEach(chip => {
-        const btn = document.createElement('button');
-        btn.className = 'slt-follow-chip';
-        btn.textContent = chip;
-        btn.addEventListener('click', () => { wrapper.remove(); sendMessage(chip); });
-        wrapper.appendChild(btn);
-      });
-      messages.appendChild(wrapper);
-      messages.scrollTop = messages.scrollHeight;
-    }
-
-    async function sendMessage(text) {
-      if (!text.trim()) return;
-
-      const isProductSearch = /dress|show|find|style|outfit|party|wedding|bridesmaid|maxi|midi|mini|sequin|wear|look|clothing/i.test(text);
-
-      if (!selectedSize && isProductSearch && conversationHistory.length === 0) {
-        chipsContainer.innerHTML = '';
-        addUserMessage(text);
-        conversationHistory.push({ role: 'user', content: text });
-        addBotMessage("Great choice! What's your size? I'll filter the results for you.");
-
-        const sizePicker = document.createElement('div');
-        sizePicker.className = 'slt-size-picker';
-
-        const sizes = ['UK6', 'UK8', 'UK10', 'UK12', 'UK14', 'UK16', 'UK18', 'UK20'];
-        sizes.forEach(size => {
-          const btn = document.createElement('button');
-          btn.className = 'slt-chip';
-          btn.textContent = size;
-          btn.addEventListener('click', () => {
-            selectedSize = size;
-            document.getElementById('slt-size-btn').textContent = `${size} ✕`;
-            sizePicker.remove();
-            // Fix 2 — confirmation message after size selection
-            const originalQuery = text.replace(/ in size.*/i, '');
-            const confirmMsg = `Perfect! Showing you ${size} options for "${originalQuery}"...`;
-            addBotMessage(confirmMsg);
-            conversationHistory.push({ role: 'assistant', content: confirmMsg });
-            setTimeout(() => doSearch(`${originalQuery} in size ${size}`), 600);
-          });
-          sizePicker.appendChild(btn);
-        });
-
-        const skipBtn = document.createElement('button');
-        skipBtn.className = 'slt-chip';
-        skipBtn.style.opacity = '0.6';
-        skipBtn.textContent = 'Skip — show all';
-        skipBtn.addEventListener('click', () => {
-          sizePicker.remove();
-          doSearch(text);
-        });
-        sizePicker.appendChild(skipBtn);
-        messages.appendChild(sizePicker);
-        messages.scrollTop = messages.scrollHeight;
+    // Add to cart
+    var atcBtn = document.getElementById('slt-pd-atc');
+    atcBtn && atcBtn.addEventListener('click', function () {
+      var varId = atcBtn.dataset.variantId || selectedVariantId;
+      if (!varId || varId === 'undefined') {
+        var lbl = document.getElementById('slt-pd-size-label');
+        if (lbl) { lbl.textContent = 'Please select a size ↑'; lbl.style.color = '#c0392b'; }
         return;
       }
-
-      const queryWithSize = selectedSize &&
-        !text.toLowerCase().includes('size') &&
-        !text.toLowerCase().includes(selectedSize.toLowerCase())
-        ? `${text} in size ${selectedSize}`
-        : text;
-
-      conversationHistory.push({ role: 'user', content: text });
-      doSearch(queryWithSize);
-    }
-
-    async function doSearch(text) {
-      chipsContainer.innerHTML = '';
-      // Fix 4 — ensure input is always cleared
-      input.value = '';
-      input.blur();
-      sendBtn.disabled = true;
-      showTyping();
-
-      try {
-        const r = await fetch(API_URL + '/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            shop: SHOP,
-            message: text,
-            history: conversationHistory.slice(-10)
-          })
-        });
-        const data = await r.json();
-        hideTyping();
-        addBotMessage(data.reply);
-        conversationHistory.push({ role: 'assistant', content: data.reply });
-
-        if (data.products?.length) {
-          renderProducts(data.products, data.searchQuery || text, data.cursor);
-          if (data.refineChips?.length) renderFollowUpChips(data.refineChips);
-        }
-        if (data.promptChips?.length) renderChips(data.promptChips);
-      } catch {
-        hideTyping();
-        addBotMessage('Sorry, something went wrong. Please try again.');
-      } finally {
-        sendBtn.disabled = false;
-      }
-    }
-
-    sendBtn.addEventListener('click', () => sendMessage(input.value));
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(input.value); });
+      atcBtn.textContent = 'Adding…';
+      atcBtn.disabled    = true;
+      addToCart(varId, 1).then(function () {
+        atcBtn.textContent = '✓ Added to Cart!';
+        setTimeout(closeProductDrawer, 1400);
+      }).catch(function () {
+        atcBtn.textContent = 'Add to Cart';
+        atcBtn.disabled    = false;
+      });
+    });
   }
 
-  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', init); }
-  else { init(); }
+  function closeProductDrawer() {
+    var drawer = document.getElementById('slt-pd');
+    if (!drawer) return;
+    var panel = document.getElementById('slt-pd-panel');
+    if (panel) panel.classList.remove('slt-pd-open');
+    setTimeout(function () {
+      if (drawer.parentNode) drawer.parentNode.removeChild(drawer);
+    }, 320);
+  }
+
+  // ─────────────────────────────────────────────
+  // EVENT BINDING FOR CARDS (scoped to a container el)
+  // ─────────────────────────────────────────────
+  function bindCardListeners(container) {
+    // Product card → drawer
+    container.querySelectorAll('.slt-product-card').forEach(function (card) {
+      card.addEventListener('click', function (e) {
+        if (e.target.closest('.slt-card-cart-btn')) return;
+        try {
+          openProductDrawer(JSON.parse(card.dataset.product));
+        } catch (_) {}
+      });
+      card.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          card.click();
+        }
+      });
+    });
+
+    // Quick add to cart button
+    container.querySelectorAll('.slt-card-cart-btn').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var varId = btn.dataset.variantId;
+        if (!varId || varId === 'undefined') {
+          // No first-variant available — open drawer for size selection
+          var card = btn.closest('.slt-product-card');
+          if (card) {
+            try { openProductDrawer(JSON.parse(card.dataset.product)); } catch (_) {}
+          }
+          return;
+        }
+        btn.innerHTML = '…';
+        btn.disabled  = true;
+        addToCart(varId, 1).then(function () {
+          btn.innerHTML = '✓';
+          setTimeout(function () {
+            btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>';
+            btn.disabled = false;
+          }, 2200);
+        }).catch(function () {
+          btn.innerHTML = '!';
+          btn.disabled  = false;
+        });
+      });
+    });
+
+    // Carousel arrows
+    container.querySelectorAll('.slt-arr').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var pi = document.getElementById('slt-pi-' + btn.dataset.mid);
+        if (pi) pi.scrollBy({ left: btn.classList.contains('slt-arr-next') ? 260 : -260, behavior: 'smooth' });
+      });
+    });
+
+    // Show More / Show Less
+    container.querySelectorAll('.slt-more-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        toggleExpansion(btn.dataset.mid, btn.dataset.action === 'expand');
+      });
+    });
+
+    // Make It Yours chips
+    container.querySelectorAll('.slt-miy-chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        var query = chip.dataset.val + (chip.dataset.orig ? ' ' + chip.dataset.orig : '');
+        fireQuery(query);
+      });
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // CART
+  // ─────────────────────────────────────────────
+  function addToCart(variantId, quantity) {
+    return fetch('/cart/add.js', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: variantId, quantity: quantity || 1 }),
+    }).then(function (r) {
+      if (!r.ok) throw new Error('Cart add failed: ' + r.status);
+      triggerCartDrawer();
+      refreshCartCount();
+      return r.json();
+    });
+  }
+
+  function triggerCartDrawer() {
+    var selectors = [
+      '[data-cart-drawer-toggle]',
+      '[data-drawer="cart-drawer"]',
+      '.cart-drawer__toggle',
+      'a[href="#cart-drawer"]',
+      '[data-cart-toggle]',
+      '.js-cart-open',
+      '#cart-icon-bubble',
+      '.cart-icon-bubble',
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+      var el = document.querySelector(selectors[i]);
+      if (el) { el.click(); return; }
+    }
+    // Fallback: custom events (Dawn, Debut, etc.)
+    ['cart:open', 'theme:cart:open', 'CartDrawer:open', 'cart-drawer:open'].forEach(function (evName) {
+      document.dispatchEvent(new CustomEvent(evName, { bubbles: true }));
+    });
+  }
+
+  function refreshCartCount() {
+    fetch('/cart.js')
+      .then(function (r) { return r.json(); })
+      .then(function (cart) {
+        document.querySelectorAll('[data-cart-count], .cart-count, .cart__count, .cart-icon__bubble-count').forEach(function (el) {
+          el.textContent = cart.item_count;
+        });
+      })
+      .catch(function () {});
+  }
+
+  // ─────────────────────────────────────────────
+  // TYPING INDICATOR
+  // ─────────────────────────────────────────────
+  function showTyping() {
+    var wrap = document.getElementById('slt-messages');
+    if (!wrap) return;
+    var el   = document.createElement('div');
+    el.id    = 'slt-typing';
+    el.className = 'slt-msg slt-msg--assistant';
+    el.innerHTML = '<div class="slt-bubble slt-bubble-ai slt-typing"><span></span><span></span><span></span></div>';
+    wrap.appendChild(el);
+    el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
+
+  function hideTyping() {
+    var el = document.getElementById('slt-typing');
+    if (el) el.parentNode.removeChild(el);
+  }
+
+  // ─────────────────────────────────────────────
+  // SIZE FILTER MODAL
+  // ─────────────────────────────────────────────
+  var SIZE_OPTIONS = [
+    'XS','S','M','L','XL','XXL','XXXL',
+    'UK 4','UK 6','UK 8','UK 10','UK 12','UK 14','UK 16','UK 18','UK 20',
+    'US 0','US 2','US 4','US 6','US 8','US 10','US 12',
+    'EU 32','EU 34','EU 36','EU 38','EU 40','EU 42',
+    'ONE SIZE',
+  ];
+
+  function openSizeModal() {
+    if (document.getElementById('slt-size-modal')) {
+      document.getElementById('slt-size-modal').remove();
+      return;
+    }
+    var modal = document.createElement('div');
+    modal.id  = 'slt-size-modal';
+    modal.innerHTML =
+      '<div class="slt-modal-bg" id="slt-modal-bg"></div>' +
+      '<div class="slt-modal-box">' +
+        '<div class="slt-modal-hd">' +
+          '<span>Select Sizes to Filter</span>' +
+          '<button class="slt-modal-x" id="slt-modal-x" aria-label="Close">&#10005;</button>' +
+        '</div>' +
+        '<div class="slt-modal-grid">' +
+          SIZE_OPTIONS.map(function (s) {
+            return '<button class="slt-sz-chip' + (state.selectedSizes.indexOf(s) > -1 ? ' sel' : '') + '"' +
+              ' data-size="' + esc(s) + '">' + esc(s) + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div class="slt-modal-ft">' +
+          '<button class="slt-modal-cancel" id="slt-modal-cancel">Cancel</button>' +
+          '<button class="slt-modal-save" id="slt-modal-save">Apply Filter</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    var tmp = state.selectedSizes.slice();
+
+    modal.querySelectorAll('.slt-sz-chip').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var sz  = btn.dataset.size;
+        var idx = tmp.indexOf(sz);
+        if (idx > -1) { tmp.splice(idx, 1); btn.classList.remove('sel'); }
+        else          { tmp.push(sz);       btn.classList.add('sel');    }
+      });
+    });
+
+    function closeModal() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
+
+    document.getElementById('slt-modal-bg').addEventListener('click', closeModal);
+    document.getElementById('slt-modal-x').addEventListener('click', closeModal);
+    document.getElementById('slt-modal-cancel').addEventListener('click', closeModal);
+    document.getElementById('slt-modal-save').addEventListener('click', function () {
+      state.selectedSizes = tmp;
+      updateSizeBtn();
+      saveSession();
+      closeModal();
+    });
+  }
+
+  function updateSizeBtn() {
+    var btn = document.getElementById('slt-size-btn');
+    if (!btn) return;
+    if (state.selectedSizes.length === 0) {
+      btn.textContent = 'Size';
+      btn.classList.remove('slt-size-active');
+    } else {
+      btn.textContent = state.selectedSizes.slice(0, 2).join(', ') + (state.selectedSizes.length > 2 ? '…' : '');
+      btn.classList.add('slt-size-active');
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // QUICK-SEARCH CHIPS (from backend)
+  // ─────────────────────────────────────────────
+  function renderChips(chips) {
+    var wrap = document.getElementById('slt-chips');
+    if (!wrap) return;
+    wrap.innerHTML = chips.map(function (c) {
+      return '<button class="slt-chip" data-q="' + esc(c) + '">' + esc(c) + '</button>';
+    }).join('');
+    wrap.querySelectorAll('.slt-chip').forEach(function (btn) {
+      btn.addEventListener('click', function () { fireQuery(btn.dataset.q); });
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // API CALL
+  // ─────────────────────────────────────────────
+  function fireQuery(text) {
+    var input = document.getElementById('slt-input');
+    if (input) input.value = '';
+    sendMessage(text);
+  }
+
+  function sendMessage(text) {
+    if (state.isLoading || !text.trim()) return;
+    state.isLoading = true;
+
+    // Remove welcome screen if present
+    var welcome = document.querySelector('.slt-welcome');
+    if (welcome) welcome.remove();
+
+    var userMsg = {
+      id:        uid(),
+      role:      'user',
+      text:      text.trim(),
+      timestamp: Date.now(),
+    };
+    state.messages.push(userMsg);
+    state.history.push({ role: 'user', content: userMsg.text });
+    appendMessageEl(userMsg);
+
+    text.toLowerCase().split(/\s+/).forEach(function (w) { state.refineTerms.add(w); });
+
+    showTyping();
+
+    var payload = {
+      message:    userMsg.text,
+      sessionId:  state.sessionId,
+      history:    state.history.slice(-20),
+      sizes:      state.selectedSizes,
+      shop:       SHOP,
+    };
+
+    fetch(getApiUrl() + '/api/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        hideTyping();
+
+        var aiMsg = {
+          id:          uid(),
+          role:        'assistant',
+          text:        data.message || data.response || '',
+          allProducts: data.products || [],
+          query:       userMsg.text,
+          timestamp:   Date.now(),
+        };
+        state.messages.push(aiMsg);
+        state.history.push({ role: 'assistant', content: aiMsg.text });
+
+        appendMessageEl(aiMsg);
+        saveSession();
+
+        if (data.chips && data.chips.length > 0) {
+          renderChips(data.chips);
+        }
+      })
+      .catch(function (err) {
+        hideTyping();
+        console.error('[SellThru]', err);
+        var errMsg = {
+          id:          uid(),
+          role:        'assistant',
+          text:        "I'm having trouble connecting right now. Please try again in a moment.",
+          allProducts: [],
+          timestamp:   Date.now(),
+        };
+        state.messages.push(errMsg);
+        appendMessageEl(errMsg);
+      })
+      .finally(function () {
+        state.isLoading = false;
+      });
+  }
+
+  function submitInput() {
+    var input = document.getElementById('slt-input');
+    var text  = input ? input.value.trim() : '';
+    if (!text) return;
+    input.value = '';
+    sendMessage(text);
+  }
+
+  // ─────────────────────────────────────────────
+  // WIDGET MARKUP
+  // ─────────────────────────────────────────────
+  function buildWidget() {
+    // Launcher FAB
+    var launcher     = document.createElement('button');
+    launcher.id      = 'slt-launcher';
+    launcher.setAttribute('aria-label', 'Open AI Shopping Assistant');
+    launcher.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">' +
+        '<path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>' +
+      '</svg>';
+    document.body.appendChild(launcher);
+
+    // Widget panel
+    var root = document.createElement('div');
+    root.id  = 'slt-widget';
+    root.setAttribute('role', 'dialog');
+    root.setAttribute('aria-label', 'AI Shopping Assistant');
+    root.innerHTML =
+      '<div class="slt-hd">' +
+        '<div class="slt-hd-left">' +
+          '<div class="slt-hd-icon">✦</div>' +
+          '<div>' +
+            '<div class="slt-hd-title">AI Shopping Assistant</div>' +
+            '<div class="slt-hd-sub">Powered by SellThru</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="slt-hd-actions">' +
+          '<button id="slt-size-btn" title="Filter by size" aria-label="Size filter">Size</button>' +
+          '<button id="slt-new-btn"  title="New conversation" aria-label="New chat">New</button>' +
+          '<button id="slt-close"    aria-label="Close assistant">&#10005;</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="slt-messages" role="log" aria-live="polite" aria-atomic="false"></div>' +
+      '<div id="slt-chips" aria-label="Quick search suggestions"></div>' +
+      '<div class="slt-input-row">' +
+        '<input id="slt-input" type="text" placeholder="What are you looking for?" autocomplete="off" aria-label="Search input" />' +
+        '<button id="slt-send" aria-label="Send">' +
+          '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
+            '<line x1="22" y1="2" x2="11" y2="13"/>' +
+            '<polygon points="22 2 15 22 11 13 2 9 22 2"/>' +
+          '</svg>' +
+        '</button>' +
+      '</div>';
+    document.body.appendChild(root);
+  }
+
+  function showWelcome() {
+    var wrap = document.getElementById('slt-messages');
+    if (!wrap || wrap.children.length > 0) return;
+    var el = document.createElement('div');
+    el.className = 'slt-welcome';
+    el.innerHTML =
+      '<div class="slt-welcome-icon">&#10024;</div>' +
+      '<div class="slt-welcome-title">How can I help you today?</div>' +
+      '<div class="slt-welcome-text">Ask me about products, styles, sizes, or anything you\'re looking for.</div>';
+    wrap.appendChild(el);
+  }
+
+  // ─────────────────────────────────────────────
+  // EVENT BINDING
+  // ─────────────────────────────────────────────
+  function bindGlobalEvents() {
+    // Launcher
+    document.getElementById('slt-launcher').addEventListener('click', function () {
+      state.isOpen = !state.isOpen;
+      document.getElementById('slt-widget').classList.toggle('slt-open', state.isOpen);
+      if (state.isOpen) {
+        var inp = document.getElementById('slt-input');
+        if (inp) inp.focus();
+      }
+    });
+
+    // Close
+    document.getElementById('slt-close').addEventListener('click', function () {
+      state.isOpen = false;
+      document.getElementById('slt-widget').classList.remove('slt-open');
+    });
+
+    // Send
+    document.getElementById('slt-send').addEventListener('click', submitInput);
+    document.getElementById('slt-input').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInput(); }
+    });
+
+    // Size filter
+    document.getElementById('slt-size-btn').addEventListener('click', openSizeModal);
+
+    // New chat
+    document.getElementById('slt-new-btn').addEventListener('click', function () {
+      if (!confirm('Start a new conversation? Your current chat will be cleared.')) return;
+      clearSession();
+      var wrap = document.getElementById('slt-messages');
+      if (wrap) wrap.innerHTML = '';
+      showWelcome();
+      updateSizeBtn();
+      renderChips([]);
+    });
+
+    // Global keyboard
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        closeProductDrawer();
+        var sm = document.getElementById('slt-size-modal');
+        if (sm) sm.parentNode.removeChild(sm);
+      }
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // INITIAL CHIP LOAD
+  // ─────────────────────────────────────────────
+  function loadInitialChips() {
+    fetch(getApiUrl() + '/api/widget-config?shop=' + encodeURIComponent(SHOP))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.chips && data.chips.length > 0) renderChips(data.chips);
+        if (data.title) {
+          var t = document.querySelector('.slt-hd-title');
+          if (t) t.textContent = data.title;
+        }
+      })
+      .catch(function () {});
+  }
+
+  // ─────────────────────────────────────────────
+  // CSS
+  // ─────────────────────────────────────────────
+  function injectCss() {
+    if (document.getElementById('slt-css')) return;
+    var s = document.createElement('style');
+    s.id  = 'slt-css';
+    s.textContent = [
+      /* Reset */
+      '#slt-widget *,#slt-pd *,#slt-size-modal *{box-sizing:border-box;margin:0;padding:0;}',
+
+      /* ── Launcher ── */
+      '#slt-launcher{position:fixed;bottom:24px;right:24px;z-index:9998;width:56px;height:56px;border-radius:50%;background:#111;color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(0,0,0,.28);transition:transform .2s,box-shadow .2s;font-family:inherit;}',
+      '#slt-launcher:hover{transform:scale(1.07);box-shadow:0 6px 26px rgba(0,0,0,.34);}',
+
+      /* ── Widget panel ── */
+      '#slt-widget{position:fixed;bottom:92px;right:24px;z-index:9997;width:420px;max-width:calc(100vw - 32px);height:680px;max-height:calc(100vh - 112px);background:#fff;border-radius:16px;box-shadow:0 8px 48px rgba(0,0,0,.2);display:flex;flex-direction:column;opacity:0;pointer-events:none;transform:translateY(14px) scale(.97);transition:opacity .24s,transform .24s;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}',
+      '#slt-widget.slt-open{opacity:1;pointer-events:all;transform:translateY(0) scale(1);}',
+
+      /* ── Header ── */
+      '.slt-hd{padding:14px 16px;background:#111;color:#fff;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:10px;}',
+      '.slt-hd-left{display:flex;align-items:center;gap:10px;}',
+      '.slt-hd-icon{font-size:18px;opacity:.9;}',
+      '.slt-hd-title{font-size:14px;font-weight:700;line-height:1.2;}',
+      '.slt-hd-sub{font-size:11px;opacity:.55;margin-top:2px;}',
+      '.slt-hd-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;}',
+      '#slt-size-btn,#slt-new-btn{background:rgba(255,255,255,.14);border:none;color:#fff;padding:4px 10px;border-radius:20px;font-size:11px;cursor:pointer;transition:background .15s;white-space:nowrap;}',
+      '#slt-size-btn.slt-size-active{background:rgba(255,255,255,.3);}',
+      '#slt-size-btn:hover,#slt-new-btn:hover{background:rgba(255,255,255,.24);}',
+      '#slt-close{background:none;border:none;color:rgba(255,255,255,.7);font-size:18px;cursor:pointer;line-height:1;padding:2px 4px;transition:color .15s;}',
+      '#slt-close:hover{color:#fff;}',
+
+      /* ── Messages ── */
+      '#slt-messages{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:10px;scroll-behavior:smooth;}',
+      '#slt-messages::-webkit-scrollbar{width:4px;}',
+      '#slt-messages::-webkit-scrollbar-thumb{background:#ddd;border-radius:4px;}',
+
+      /* ── Message bubbles ── */
+      '.slt-msg{display:flex;flex-direction:column;max-width:100%;}',
+      '.slt-msg--user{align-items:flex-end;}',
+      '.slt-msg--assistant{align-items:flex-start;}',
+      '.slt-bubble{padding:9px 13px;border-radius:14px;font-size:13.5px;line-height:1.5;max-width:88%;}',
+      '.slt-bubble-user{background:#111;color:#fff;border-bottom-right-radius:3px;}',
+      '.slt-bubble-ai{background:#f5f5f5;color:#111;border-bottom-left-radius:3px;max-width:100%;padding:12px;}',
+      '.slt-msg-text{margin-bottom:8px;color:#222;line-height:1.55;}',
+
+      /* ── Typing ── */
+      '.slt-typing{display:flex;gap:5px;align-items:center;padding:12px 16px!important;}',
+      '.slt-typing span{width:7px;height:7px;background:#bbb;border-radius:50%;animation:slt-dot 1.2s infinite ease-in-out;}',
+      '.slt-typing span:nth-child(2){animation-delay:.2s;}',
+      '.slt-typing span:nth-child(3){animation-delay:.4s;}',
+      '@keyframes slt-dot{0%,80%,100%{transform:scale(.55);opacity:.4;}40%{transform:scale(1);opacity:1;}}',
+
+      /* ── Products carousel ── */
+      '.slt-products-wrap{position:relative;margin-top:6px;}',
+      '.slt-products-carousel .slt-products-inner{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none;}',
+      '.slt-products-carousel .slt-products-inner::-webkit-scrollbar{display:none;}',
+      '.slt-products-carousel .slt-product-card{flex:0 0 148px;scroll-snap-align:start;}',
+
+      /* ── Products grid (expanded) ── */
+      '.slt-products-grid .slt-products-inner{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;}',
+      '.slt-products-grid .slt-product-card{flex:none;}',
+
+      /* ── Product card ── */
+      '.slt-product-card{border-radius:9px;overflow:hidden;background:#fff;border:1px solid #ececec;cursor:pointer;transition:box-shadow .2s,transform .2s;outline-offset:2px;}',
+      '.slt-product-card:hover{box-shadow:0 4px 18px rgba(0,0,0,.1);transform:translateY(-2px);}',
+      '.slt-card-img-wrap{position:relative;aspect-ratio:3/4;overflow:hidden;}',
+      '.slt-card-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .3s;}',
+      '.slt-product-card:hover .slt-card-img{transform:scale(1.04);}',
+      '.slt-card-badge{position:absolute;top:5px;left:5px;background:#c0392b;color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:3px;letter-spacing:.4px;}',
+      '.slt-card-cart-btn{position:absolute;bottom:6px;right:6px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.72);border:none;color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .2s;z-index:2;}',
+      '.slt-product-card:hover .slt-card-cart-btn{opacity:1;}',
+      '.slt-card-info{padding:7px 8px;}',
+      '.slt-card-title{font-size:11.5px;font-weight:500;line-height:1.3;color:#111;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:4px;}',
+      '.slt-card-price{font-size:11.5px;display:flex;gap:4px;align-items:baseline;}',
+      '.slt-price-now{font-weight:700;color:#111;}',
+      '.slt-price-was{text-decoration:line-through;color:#aaa;font-size:10.5px;}',
+      '.slt-variant-pills{display:flex;gap:3px;flex-wrap:wrap;margin-top:4px;}',
+      '.slt-variant-pill{font-size:10px;background:#f0f0f0;padding:1px 5px;border-radius:3px;color:#555;}',
+
+      /* ── Grid compact card ── */
+      '.slt-card-grid .slt-card-title{font-size:11px;}',
+      '.slt-card-grid .slt-card-price{font-size:11px;}',
+
+      /* ── Carousel arrows ── */
+      '.slt-carousel-arrows{position:absolute;top:50%;left:-6px;right:-6px;transform:translateY(-50%);pointer-events:none;display:flex;justify-content:space-between;z-index:3;}',
+      '.slt-arr{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.95);border:1px solid #ddd;font-size:16px;cursor:pointer;pointer-events:all;display:flex;align-items:center;justify-content:center;transition:background .15s;box-shadow:0 2px 6px rgba(0,0,0,.1);}',
+      '.slt-arr:hover{background:#fff;}',
+
+      /* ── Pagination ── */
+      '.slt-pagination{margin-top:8px;text-align:center;}',
+      '.slt-more-btn{background:none;border:1.5px solid #111;color:#111;padding:6px 16px;border-radius:20px;font-size:12px;cursor:pointer;transition:background .15s,color .15s;font-family:inherit;}',
+      '.slt-more-btn:hover{background:#111;color:#fff;}',
+      '.slt-less-btn{border-color:#aaa;color:#888;}',
+      '.slt-less-btn:hover{background:#888;color:#fff;border-color:#888;}',
+
+      /* ── Make It Yours ── */
+      '.slt-miy{margin-top:12px;padding-top:10px;border-top:1px solid #e5e5e5;}',
+      '.slt-miy-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#888;margin-bottom:8px;}',
+      '.slt-miy-section{margin-bottom:8px;}',
+      '.slt-miy-sec-title{font-size:11px;color:#999;margin-bottom:5px;}',
+      '.slt-miy-chips{display:flex;gap:5px;flex-wrap:wrap;}',
+      '.slt-miy-chip{background:#fff;border:1px solid #e0e0e0;color:#333;padding:4px 10px;border-radius:14px;font-size:11.5px;cursor:pointer;transition:background .15s,border-color .15s,color .15s;font-family:inherit;}',
+      '.slt-miy-chip:hover{background:#111;color:#fff;border-color:#111;}',
+
+      /* ── Suggestion chips ── */
+      '#slt-chips{padding:5px 12px 6px;display:flex;gap:5px;overflow-x:auto;flex-shrink:0;scrollbar-width:none;background:#fafafa;border-top:1px solid #f0f0f0;}',
+      '#slt-chips:empty{display:none;}',
+      '#slt-chips::-webkit-scrollbar{display:none;}',
+      '.slt-chip{background:#fff;border:1px solid #e0e0e0;color:#333;padding:5px 12px;border-radius:16px;font-size:12px;white-space:nowrap;cursor:pointer;transition:background .15s,border-color .15s;font-family:inherit;flex-shrink:0;}',
+      '.slt-chip:hover{background:#111;color:#fff;border-color:#111;}',
+
+      /* ── Input ── */
+      '.slt-input-row{padding:9px 12px;border-top:1px solid #eee;display:flex;gap:8px;flex-shrink:0;background:#fff;align-items:center;}',
+      '#slt-input{flex:1;border:1px solid #ddd;border-radius:22px;padding:8px 14px;font-size:13.5px;outline:none;transition:border-color .15s;font-family:inherit;}',
+      '#slt-input:focus{border-color:#111;}',
+      '#slt-send{width:36px;height:36px;border-radius:50%;background:#111;border:none;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}',
+      '#slt-send:hover{background:#333;}',
+
+      /* ── Welcome ── */
+      '.slt-welcome{text-align:center;padding:32px 16px;color:#666;}',
+      '.slt-welcome-icon{font-size:32px;margin-bottom:10px;}',
+      '.slt-welcome-title{font-size:15px;font-weight:600;color:#111;margin-bottom:6px;}',
+      '.slt-welcome-text{font-size:13px;line-height:1.55;color:#888;}',
+
+      /* ── Size modal ── */
+      '#slt-size-modal{position:fixed;inset:0;z-index:10002;display:flex;align-items:flex-end;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}',
+      '.slt-modal-bg{position:absolute;inset:0;background:rgba(0,0,0,.42);}',
+      '.slt-modal-box{position:relative;background:#fff;border-radius:18px 18px 0 0;padding:20px 16px 24px;width:100%;max-width:500px;z-index:1;max-height:80vh;overflow-y:auto;}',
+      '.slt-modal-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;font-weight:600;font-size:15px;}',
+      '.slt-modal-x{background:none;border:none;font-size:18px;cursor:pointer;color:#666;line-height:1;}',
+      '.slt-modal-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px;}',
+      '.slt-sz-chip{padding:9px 4px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12.5px;cursor:pointer;text-align:center;transition:background .15s,border-color .15s;font-family:inherit;}',
+      '.slt-sz-chip.sel{background:#111;color:#fff;border-color:#111;}',
+      '.slt-modal-ft{display:flex;gap:10px;}',
+      '.slt-modal-cancel{flex:1;padding:11px;border:1px solid #ddd;border-radius:9px;background:#fff;cursor:pointer;font-size:14px;font-family:inherit;}',
+      '.slt-modal-save{flex:1;padding:11px;border:none;border-radius:9px;background:#111;color:#fff;cursor:pointer;font-size:14px;font-weight:600;font-family:inherit;}',
+
+      /* ── Product drawer ── */
+      '#slt-pd{position:fixed;inset:0;z-index:10001;display:flex;justify-content:flex-end;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}',
+      '.slt-pd-overlay{position:absolute;inset:0;background:rgba(0,0,0,.42);}',
+      '.slt-pd-panel{position:relative;background:#fff;z-index:1;width:480px;max-width:100vw;height:100%;overflow-y:auto;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);}',
+      '.slt-pd-panel.slt-pd-open{transform:translateX(0);}',
+      '.slt-pd-close{position:absolute;top:12px;right:12px;z-index:3;background:rgba(255,255,255,.92);border:none;border-radius:50%;width:32px;height:32px;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12);transition:background .15s;}',
+      '.slt-pd-close:hover{background:#fff;}',
+      '.slt-pd-images{flex-shrink:0;}',
+      '.slt-pd-main-wrap{position:relative;aspect-ratio:3/4;overflow:hidden;background:#f8f8f8;}',
+      '.slt-pd-main-wrap img{width:100%;height:100%;object-fit:cover;display:block;}',
+      '.slt-pd-arrow{position:absolute;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.9);border:none;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12);}',
+      '.slt-pd-prev{left:10px;}',
+      '.slt-pd-next{right:10px;}',
+      '.slt-pd-thumbs{display:flex;gap:6px;padding:8px 12px;overflow-x:auto;scrollbar-width:none;}',
+      '.slt-pd-thumbs::-webkit-scrollbar{display:none;}',
+      '.slt-pd-thumb{width:58px;height:76px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:.55;transition:opacity .15s;border:2px solid transparent;flex-shrink:0;}',
+      '.slt-pd-thumb.active{opacity:1;border-color:#111;}',
+      '.slt-pd-details{padding:20px;flex:1;}',
+      '.slt-pd-name{font-size:17px;font-weight:700;color:#111;line-height:1.3;margin-bottom:10px;}',
+      '.slt-pd-price-row{display:flex;align-items:baseline;gap:8px;margin-bottom:18px;}',
+      '.slt-pd-price-now{font-size:20px;font-weight:700;color:#111;}',
+      '.slt-pd-price-was{font-size:14px;text-decoration:line-through;color:#aaa;}',
+      '.slt-pd-size-section{margin-bottom:18px;}',
+      '.slt-pd-size-label{font-size:13px;font-weight:600;color:#111;margin-bottom:8px;}',
+      '.slt-pd-size-btns{display:flex;gap:7px;flex-wrap:wrap;}',
+      '.slt-pd-size-btn{padding:7px 13px;border:1px solid #ddd;border-radius:6px;background:#fff;font-size:13px;cursor:pointer;transition:background .15s,border-color .15s;font-family:inherit;}',
+      '.slt-pd-size-btn.sel{background:#111;color:#fff;border-color:#111;}',
+      '.slt-pd-desc{font-size:13px;color:#555;line-height:1.6;margin-bottom:20px;max-height:130px;overflow-y:auto;}',
+      '.slt-pd-desc p{margin-bottom:6px;}',
+      '.slt-pd-footer{display:flex;flex-direction:column;gap:10px;margin-top:auto;}',
+      '.slt-pd-atc{padding:14px;background:#111;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:background .15s;font-family:inherit;}',
+      '.slt-pd-atc:hover:not(:disabled){background:#333;}',
+      '.slt-pd-atc:disabled{opacity:.6;cursor:default;}',
+      '.slt-pd-pdp-link{display:block;padding:12px;background:#fff;color:#111;border:1px solid #ddd;border-radius:8px;font-size:13.5px;text-align:center;text-decoration:none;transition:border-color .15s;}',
+      '.slt-pd-pdp-link:hover{border-color:#111;}',
+
+      /* ── Mobile ── */
+      '@media(max-width:480px){',
+      '#slt-widget{right:0;bottom:0;width:100vw;max-width:100vw;height:100vh;max-height:100vh;border-radius:0;}',
+      '#slt-launcher{bottom:16px;right:16px;}',
+      '.slt-pd-panel{width:100vw;}',
+      '}',
+    ].join('');
+    document.head.appendChild(s);
+  }
+
+  // ─────────────────────────────────────────────
+  // INIT
+  // ─────────────────────────────────────────────
+  function init() {
+    injectCss();
+    buildWidget();
+    bindGlobalEvents();
+
+    var hadSession = loadSession();
+    updateSizeBtn();
+
+    if (hadSession) {
+      restoreAllMessages();
+    } else {
+      showWelcome();
+    }
+
+    loadInitialChips();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
 })();

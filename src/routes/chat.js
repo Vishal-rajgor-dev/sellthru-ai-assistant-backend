@@ -1,276 +1,252 @@
-require('dotenv').config();
-const express = require('express');
-const router = express.Router();
-const supabase = require('../config/supabase');
-const OpenAI = require('openai');
-const { searchProducts, getStoreContext } = require('../services/catalogMcp');
+/**
+ * SellThru AI Assistant — Chat Route v2.0
+ * POST /api/chat
+ *
+ * Returns: { message, products: [...all matched...], chips }
+ * Widget handles client-side pagination (PAGE_SIZE = 8).
+ */
+
+const express  = require('express');
+const router   = express.Router();
+const OpenAI   = require('openai');
+const { GeminiService } = require('../services/gemini');
+const { CatalogMcpClient } = require('../services/catalogMcp');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const tools = [
-  {
-    type: 'function',
-    function: {
-      name: 'search_products',
-      description: 'Search the store products based on what the shopper is looking for',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'The search query e.g. "black dress under $50" or "bridesmaid dresses"'
-          }
-        },
-        required: ['query']
-      }
-    }
-  }
-];
+// ─────────────────────────────────────────────
+// SYSTEM PROMPT BUILDER
+// ─────────────────────────────────────────────
+function buildSystemPrompt(storeContext, sizes) {
+  const sizeClause = sizes && sizes.length > 0
+    ? `The customer has pre-filtered for sizes: ${sizes.join(', ')}. ONLY recommend products available in these sizes when possible.`
+    : '';
 
-function formatProduct(p) {
-  return {
-    id: p.id,
-    title: p.title,
-    handle: p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''),
-    description: p.description?.html
-      ? p.description.html.replace(/<[^>]*>/g, '').substring(0, 300)
-      : '',
-    price: p.price_range?.min
-      ? `$${(p.price_range.min.amount / 100).toFixed(2)}`
-      : null,
-    comparePrice: (p.price_range?.max && p.price_range.max.amount > p.price_range.min.amount)
-      ? `$${(p.price_range.max.amount / 100).toFixed(2)}`
-      : null,
-    image: p.media?.[0]?.url || null,
-    images: p.media?.map(m => m.url).filter(Boolean) || [],
-    variantId: p.variants?.[0]?.id || null,
-    variants: (p.variants || []).map(v => ({
-      id: v.id,
-      title: v.title,
-      price: v.price ? `$${(v.price.amount / 100).toFixed(2)}` : null,
-      available: v.availability?.available ?? true,
-      options: v.options || []
-    })),
-    options: p.options || [],
-    available: (p.variants || []).some(v => v.availability?.available) ?? true,
-    tags: p.tags || [],
-    productType: p.product_type || '',
-    url: p.url || `/products/${p.handle || p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
-  };
+  return `You are an expert AI shopping assistant for ${storeContext.name || 'this online store'}.
+${storeContext.description ? `Store: ${storeContext.description}` : ''}
+
+Your role:
+- Help customers find products they'll love with warm, knowledgeable advice
+- Ask clarifying questions when helpful (occasion, budget, style preference)
+- Reference specific product names and features from the catalog
+- Be concise — 2-4 sentences max per response unless detail is genuinely needed
+- Never make up products; only reference what's in the catalog
+- Universal tone: works for fashion, electronics, home goods, beauty, or any store type
+
+${sizeClause}
+
+Respond naturally. Do not use markdown headers or bullet lists. Flowing conversational prose only.
+After finding products, briefly describe what makes them a good fit, then let the product cards do the visual work.`;
 }
 
-router.post('/api/chat', async (req, res) => {
-  const { shop, message, cursor, maxPrice, minPrice, history = [] } = req.body;
+// ─────────────────────────────────────────────
+// CHIP GENERATION from query + products
+// ─────────────────────────────────────────────
+function generateChips(userQuery, products, history) {
+  const chips = new Set();
 
-  if (!shop || !message) {
-    return res.status(400).json({ error: 'Missing shop or message' });
-  }
+  // Extract colors from products for follow-up suggestions
+  const colors = new Set();
+  const types  = new Set();
 
-  const { data: session, error } = await supabase
-    .from('sessions')
-    .select('access_token')
-    .eq('shop', shop)
-    .single();
+  products.slice(0, 12).forEach(function (p) {
+    if (p.product_type) types.add(p.product_type);
+    (p.options || []).forEach(function (opt) {
+      if (/colou?r/i.test(opt.name)) {
+        (opt.values || []).slice(0, 3).forEach(function (v) { colors.add(v); });
+      }
+    });
+  });
 
-  if (error || !session) {
-    return res.status(401).json({ error: 'Shop not installed' });
-  }
+  // Generate contextual follow-up chips
+  const queryLower = userQuery.toLowerCase();
 
-  const { data: config } = await supabase
-    .from('merchant_config')
-    .select('*')
-    .eq('shop', shop)
-    .single();
+  if (products.length > 0) {
+    // Budget refinement
+    chips.add('Under £50');
+    chips.add('Best sellers');
 
-  if (!config) {
-    await supabase.from('merchant_config').insert({ shop });
-  }
-
-  let storeContext = '';
-  try {
-    const context = await getStoreContext(session.access_token, shop);
-    if (context) {
-      storeContext = `
-This store sells: ${context.types.join(', ') || 'fashion and clothing'}
-Example products: ${context.titles.join(', ')}
-Common tags: ${context.tags.join(', ')}`;
+    // Color variations (from actual results)
+    if (colors.size > 0) {
+      const colorArr = [...colors].slice(0, 2);
+      colorArr.forEach(function (c) { chips.add(c + ' ' + (userQuery.split(' ').slice(0, 3).join(' '))); });
     }
-  } catch (e) {
-    storeContext = '';
+
+    // Category variations
+    if (types.size > 0) {
+      const typeArr = [...types].slice(0, 1);
+      typeArr.forEach(function (t) { chips.add('More ' + t); });
+    }
   }
 
-  const systemPrompt = {
-    role: 'system',
-    content: `You are a stylish and knowledgeable personal shopping assistant for a fashion store.
-${storeContext}
+  // Generic helpful chips if nothing specific
+  if (chips.size < 3) {
+    chips.add('New arrivals');
+    chips.add('Best sellers');
+    chips.add('Show all');
+  }
 
-Your personality:
-- Warm, friendly and fashion-forward
-- Give brief styling tips alongside product recommendations
-- Remember what the shopper asked earlier in the conversation
-- Use context from previous messages
+  return [...chips].slice(0, 6);
+}
 
-Your job:
-- ALWAYS use search_products tool for any product question
-- "best sellers" → search "bestsellers"
-- "new arrivals" or "what's new" → search "new in"
-- "under $X" → include price in query
-- "bridesmaid" → search "bridesmaid dresses"
-- "party" → search "party dresses"
-- "what goes with" or "what accessories go with" → search "accessories jewellery shoes bags" NOT more dresses
-- "styling advice" or "how to style" → give outfit styling tips without searching products
-- Follow-ups like "show me those in red" or "black ones" → combine with previous search context
-- Greetings only → respond warmly without searching
-
-Response style:
-- Keep it to 1-2 sentences max
-- Add a brief styling tip when relevant
-- Never say you cannot help — always try
-
-Be concise, warm and helpful.`
-  };
-
-  const isProductQuery = /show|find|search|dress|cloth|product|collection|style|outfit|wear|look|buy|shop|browse|new|best|sale|under|gift|party|bride|wedding|sequin|maxi|midi|mini|colour|color|sleeve|formal|casual|black|white|red|blue|pink|size|accessories|shoes|bags|jewellery/i.test(message);
-
-  const isAccessoryQuery = /goes with|go with|accessories|accessori|shoes|bags|jewellery|jewelry|styling|style with/i.test(message);
-
-  const conversationMessages = [
-    systemPrompt,
-    ...history.slice(-10),
-    { role: 'user', content: message }
+// ─────────────────────────────────────────────
+// OPENAI CALL with 8s timeout
+// ─────────────────────────────────────────────
+async function callOpenAI(systemPrompt, history, userMessage, productContext) {
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map(function (h) { return { role: h.role, content: h.content }; }),
+    {
+      role: 'user',
+      content: productContext
+        ? userMessage + '\n\n[Available products in catalog for this query:\n' + productContext + ']'
+        : userMessage,
+    },
   ];
 
-  const colorMatch = message.match(/\b(black|white|red|blue|green|pink|purple|gold|silver|nude|beige|brown|navy|burgundy|cream|ivory|emerald|teal|coral|yellow|orange)\b/i);
-  const colorFilter = colorMatch ? colorMatch[1].toLowerCase() : null;
+  const controller = new AbortController();
+  const timeout    = setTimeout(function () { controller.abort(); }, 8000);
 
   try {
-    let responseMessage;
+    const response = await openai.chat.completions.create(
+      {
+        model:       'gpt-4o-mini',
+        messages:    messages,
+        max_tokens:  400,
+        temperature: 0.7,
+      },
+      { signal: controller.signal }
+    );
+    clearTimeout(timeout);
+    return response.choices[0].message.content;
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
 
+// ─────────────────────────────────────────────
+// GEMINI FALLBACK
+// ─────────────────────────────────────────────
+async function callGeminiFallback(systemPrompt, history, userMessage, productContext) {
+  const gemini   = new GeminiService();
+  const combined = [
+    systemPrompt,
+    ...history.map(function (h) { return h.role.toUpperCase() + ': ' + h.content; }),
+    'USER: ' + userMessage,
+    productContext ? '\n[Products: ' + productContext + ']' : '',
+  ].join('\n\n');
+
+  return await gemini.generateResponse(combined);
+}
+
+// ─────────────────────────────────────────────
+// FORMAT PRODUCT CONTEXT STRING for AI prompt
+// ─────────────────────────────────────────────
+function formatProductContext(products) {
+  if (!products || products.length === 0) return null;
+  return products.slice(0, 15).map(function (p, i) {
+    const price = p.variants && p.variants[0] ? p.variants[0].price : (p.price_min || '');
+    const sizes = (p.options || [])
+      .filter(function (o) { return /^size$/i.test(o.name); })
+      .map(function (o) { return (o.values || []).join(', '); })
+      .join('');
+    const tags = Array.isArray(p.tags)
+      ? p.tags.slice(0, 5).join(', ')
+      : (typeof p.tags === 'string' ? p.tags.split(',').slice(0, 5).join(', ') : '');
+
+    return (i + 1) + '. ' + p.title +
+      (price ? ' — ' + price : '') +
+      (p.product_type ? ' | Type: ' + p.product_type : '') +
+      (sizes ? ' | Sizes: ' + sizes : '') +
+      (tags ? ' | Tags: ' + tags : '');
+  }).join('\n');
+}
+
+// ─────────────────────────────────────────────
+// MAIN ROUTE: POST /api/chat
+// ─────────────────────────────────────────────
+router.post('/', async function (req, res) {
+  try {
+    const {
+      message,
+      sessionId,
+      history    = [],
+      sizes      = [],
+      shop,
+    } = req.body;
+
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const shopDomain = shop || req.headers['x-shop-domain'] || 'unknown';
+
+    // ── 1. Fetch products from Shopify Catalog MCP ──
+    let products = [];
     try {
-      const openAIPromise = openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: conversationMessages,
-        tools,
-        tool_choice: isProductQuery
-          ? { type: 'function', function: { name: 'search_products' } }
-          : 'auto'
+      const catalog = new CatalogMcpClient(shopDomain);
+      products = await catalog.searchProducts(message, {
+        sizes:  sizes,
+        limit:  40, // Return all matches; widget paginates to 8
       });
+    } catch (catalogErr) {
+      console.error('[SellThru] Catalog MCP error:', catalogErr.message);
+      // Continue without products — AI will give a helpful response
+    }
 
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('OpenAI timeout')), 8000)
-      );
+    // ── 2. Get store context ──
+    let storeContext = { name: shopDomain };
+    try {
+      const catalog = new CatalogMcpClient(shopDomain);
+      storeContext  = await catalog.getStoreInfo() || storeContext;
+    } catch (_) {}
 
-      const completion = await Promise.race([openAIPromise, timeoutPromise]);
-      responseMessage = completion.choices[0].message;
-      console.log('Using OpenAI');
+    // ── 3. Build system prompt ──
+    const systemPrompt   = buildSystemPrompt(storeContext, sizes);
+    const productContext = formatProductContext(products);
 
-    } catch (openAIError) {
-      console.warn('OpenAI failed, switching to Gemini:', openAIError.message);
+    // ── 4. Call AI (OpenAI → Gemini fallback) ──
+    let aiMessage;
+    try {
+      aiMessage = await callOpenAI(systemPrompt, history, message, productContext);
+    } catch (openAiErr) {
+      const isTimeout = openAiErr.name === 'AbortError' || openAiErr.code === 'ECONNABORTED';
+      console.warn('[SellThru] OpenAI', isTimeout ? 'timeout' : 'error', '— falling back to Gemini');
       try {
-        const { chatWithGemini } = require('../services/gemini');
-        responseMessage = await chatWithGemini(conversationMessages, tools);
-        console.log('Using Gemini fallback');
-      } catch (geminiError) {
-        console.error('Gemini also failed:', geminiError.message);
-        return res.status(503).json({
-          error: 'AI service temporarily unavailable. Please try again.',
-          products: [],
-          cursor: null
-        });
+        aiMessage = await callGeminiFallback(systemPrompt, history, message, productContext);
+      } catch (geminiErr) {
+        console.error('[SellThru] Gemini fallback error:', geminiErr.message);
+        aiMessage = products.length > 0
+          ? 'I found some great options for you — take a look below!'
+          : "I'm having a moment — please try again shortly.";
       }
     }
 
-    if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-      const toolCall = responseMessage.tool_calls[0];
-      const args = JSON.parse(toolCall.function.arguments);
+    // ── 5. Generate follow-up chips ──
+    const chips = generateChips(message, products, history);
 
-      const result = await searchProducts(session.access_token, shop, args.query, {
-        cursor: cursor || null,
-        maxPrice: maxPrice || null,
-        minPrice: minPrice || null,
-        colorFilter
-      });
-
-      if (result === null) {
-        return res.json({
-          reply: 'Sorry, search is unavailable right now. Please try again.',
-          products: [],
-          cursor: null,
-          searchQuery: args.query
-        });
-      }
-
-      const formatted = result.products.map(formatProduct);
-
-      await supabase.from('analytics_events').insert({
-        shop,
-        event_type: 'search',
-        query: args.query
-      });
-
-      let reply = '';
-      if (responseMessage.content) {
-        reply = responseMessage.content;
-      } else if (formatted.length > 0) {
-        try {
-          const fashionReply = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            max_tokens: 80,
-            messages: [
-              {
-                role: 'system',
-                content: 'You are a fashion stylist. Give a 2 sentence warm response about the products found. Include a brief styling tip. Be concise and enthusiastic.'
-              },
-              {
-                role: 'user',
-                content: `Customer searched for: "${args.query}". Found ${formatted.length} products including: ${formatted.slice(0, 3).map(p => p.title).join(', ')}. Write a short warm response with a styling tip.`
-              }
-            ]
-          });
-          reply = fashionReply.choices[0].message.content;
-        } catch (e) {
-          reply = `Found ${formatted.length} beautiful styles for you!`;
-        }
-      } else {
-        reply = `Sorry, I couldn't find anything for "${args.query}". Try a different search.`;
-      }
-
-      // Context-aware refine chips
-      const refineChips = formatted.length > 0 ? [
-        'Show cheaper options',
-        'Show in black',
-        isAccessoryQuery ? 'Show matching dresses' : 'What accessories go with these?',
-        'Show something different',
-      ] : [];
-
-      res.json({
-        reply,
-        searchQuery: args.query,
-        products: formatted,
-        cursor: result.cursor,
-        promptChips: config?.prompt_chips || [],
-        refineChips,
-        isAccessorySearch: isAccessoryQuery
-      });
-
-    } else {
-      await supabase.from('analytics_events').insert({
-        shop,
-        event_type: 'message',
-        query: message
-      });
-
-      res.json({
-        reply: responseMessage.content,
-        products: [],
-        cursor: null,
-        promptChips: config?.prompt_chips || []
-      });
-    }
+    // ── 6. Return full product objects (widget paginates) ──
+    return res.json({
+      message:  aiMessage,
+      products: products,   // full array — widget shows 8, "Show N More" for rest
+      chips:    chips,
+      meta: {
+        shop:          shopDomain,
+        sessionId:     sessionId,
+        productCount:  products.length,
+        model:         'gpt-4o-mini',
+      },
+    });
 
   } catch (err) {
-    console.error('Chat error:', err.message);
-    res.status(500).json({ error: 'Service unavailable' });
+    console.error('[SellThru] /api/chat unhandled error:', err);
+    return res.status(500).json({
+      error:    'Internal server error',
+      message:  "Something went wrong. Please try again.",
+      products: [],
+      chips:    [],
+    });
   }
 });
 
